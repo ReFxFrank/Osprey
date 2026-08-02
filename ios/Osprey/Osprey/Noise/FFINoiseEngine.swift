@@ -1,5 +1,10 @@
 import Foundation
-import OspreyFFI
+
+// No `import` for the Rust core: UniFFI emits `osprey_ffi.swift`, which
+// `scripts/build-xcframework.sh` adds directly to this Xcode target, so its
+// types are already in this module. The generated file imports the C shim
+// (`osprey_ffiFFI`) from the XCFramework's modulemap itself. Importing a
+// hand-guessed module name here would fail to compile.
 
 /// The only file in the app that touches the Rust core.
 ///

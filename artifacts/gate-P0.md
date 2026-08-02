@@ -1,53 +1,56 @@
 # Gate Report — P0: Foundations
 
 *Osprey (formerly codenamed TETHER). Report format per brief §15.*
+*Last updated after the no-Mac completion pass.*
 
 ## Status
 
 **FAIL**
 
-This is a scope failure, not a defect failure. The Windows-agent, relay, and
-protocol two-thirds of P0 are complete and verified to the standard the brief
-demands. **The iOS client was not built at all** — there is no Xcode project, no
-app source, no Secure Enclave identity, no QR scanner, no pairing UI. Only the
-generated protocol types exist, and no Swift compiler has ever read them.
+A scope failure, not a defect failure. Everything buildable without a Mac is now
+built and verified: the Windows agent, the relay, the protocol layer, the
+Rust↔Swift bridge, and the complete iOS client **source**. What is missing is
+verification: **no Swift in this repository has ever been compiled against the
+Apple SDK, and nothing has run on the physical iPhone.**
 
-Three of the seven gate criteria therefore cannot be evaluated, including
-criterion 1, which is the headline of the phase. Reporting this as "PASS WITH
-DEVIATIONS" would put a green checkmark over a third of the phase that does not
-exist, so it is a FAIL until the iOS work is done on the cloud Mac.
+Three gate criteria therefore remain unevaluated, including criterion 1, which is
+the headline of the phase. Marking those green would put a checkmark over
+untested code, so the gate stays FAIL until the cloud-Mac session closes them.
 
-Nothing below is estimated. Every number was produced by a command I ran in this
+Nothing below is estimated. Every number came from a command run in this
 environment and observed.
 
 ## Criteria
 
 | # | Criterion (verbatim from brief) | Result | Evidence |
 |---|---|---|---|
-| 1 | Phone scans QR, pairs, exchanges an authenticated encrypted `ping`/`pong` over the local network. | **NOT MEASURED** | No iOS app exists; no macOS/Xcode/Swift in this environment. The *protocol* equivalent is proven agent-side: `pair_then_session_then_unpair_blocks_the_next_connection` runs a full IKpsk2 pairing, steady-state IK session, and encrypted ping/pong over real TCP on loopback. That is not the criterion, which requires the phone. |
-| 2 | Keys survive agent restart and app restart. | **PARTIAL** | Agent half PASS: `dev_keystore_survives_a_save_load_cycle` reopens the keystore as a restart proxy and asserts the reloaded bundle is byte-identical and still verifies. App half NOT MEASURED — no app. |
-| 3 | Unpair works from both sides and immediately blocks traffic. | **PASS** | Both directions implemented and tested. Agent side: `osprey-svc unpair`. Peer side: `pair.revoke` verified against the pinned identity, with freshness window, single-use nonce, issuer/target binding. 4 `peer_revoke` tests, incl. wrong-identity, replayed-nonce and stale-timestamp rejection. Enforcement is local and authoritative; the relay is never the enforcement point. |
-| 4 | Tampering with a handshake byte causes a clean logged failure, not a panic. | **PASS** | `cargo test -p osprey-core`; byte-flip tests across handshake offsets return typed errors and write an audit entry. `#![deny(clippy::unwrap_used, clippy::expect_used)]` is active on the crypto crates and was proven to fire by inserting a deliberate `unwrap()`. |
-| 5 | Cross-tenant test suite green: two accounts, every endpoint, 404 on foreign resources. **Report the endpoint count.** | **PASS — 8 endpoints** | `relay/test/tenant-isolation.test.ts`, 8 tests. Coverage is not hand-maintained: the suite enumerates the live Fastify route table and fails if any registered route lacks a cross-tenant assertion, and also fails on assertions naming routes that no longer exist. 1 route is explicitly exempt (`GET /healthz`, a constant-returning liveness probe). |
-| 6 | No raw `db.` access outside `src/repo/` — lint rule active and passing. | **PASS** | `pnpm lint` clean. Two independent mechanisms (string-pattern `no-restricted-imports` + resolver-based `eslint-plugin-boundaries`). Proven to actually fire, not merely configured: `test/lint-enforcement.test.ts` plants a violating file and asserts the error, including in a nested subdirectory. |
-| 7 | `cargo clippy -- -D warnings` and `swiftlint` clean. | **PARTIAL** | clippy PASS on both the host and `x86_64-pc-windows-msvc` (exit 0, all targets). swiftlint **NOT MEASURED** — not installed and no Swift toolchain in this container. |
-| + | *(added by amendment A17)* Against a deliberately malicious relay, key substitution / self-redemption / token replay all fail closed. | **PASS** | Re-attacked after remediation: relay-side key substitution cannot complete the PSK handshake; a replayed or expired token is refused; the redeem path is single-use and atomic. |
+| 1 | Phone scans QR, pairs, exchanges an authenticated encrypted `ping`/`pong` over the local network. | **NOT MEASURED** | iOS client source exists (47 Swift files) but has never been compiled — no Apple SDK here. The protocol equivalent is proven agent-side: `pair_then_session_then_unpair_blocks_the_next_connection` runs a full IKpsk2 pairing, a steady-state IK session, encrypted ping/pong and unpair over real TCP on loopback. That is not the criterion, which requires the phone. |
+| 2 | Keys survive agent restart and app restart. | **PARTIAL** | Agent half PASS — `dev_keystore_survives_a_save_load_cycle` reopens the keystore as a restart proxy and asserts the reloaded bundle is byte-identical and still verifies. App half NOT MEASURED: Keychain/Secure Enclave persistence needs the device. |
+| 3 | Unpair works from both sides and immediately blocks traffic. | **PASS** | Both directions. Agent side: `osprey-svc unpair`. Peer side: `pair.revoke` verified against the pinned identity with a freshness window, single-use nonce, and issuer/target binding; wrong-identity, replayed-nonce and stale-timestamp cases all rejected. Enforcement is local and authoritative — the relay is never the enforcement point. |
+| 4 | Tampering with a handshake byte causes a clean logged failure, not a panic. | **PASS** | Byte-flip tests across handshake offsets return typed errors and write an audit entry. `#![deny(clippy::unwrap_used, clippy::expect_used)]` is active on the crypto crates and was proven to fire by inserting a deliberate `unwrap()`. |
+| 5 | Cross-tenant test suite green: two accounts, every endpoint, 404 on foreign resources. **Report the endpoint count.** | **PASS — 8 endpoints** | The suite enumerates the live Fastify route table and fails if any registered route lacks a cross-tenant assertion, and also fails on assertions naming routes that no longer exist. One route is explicitly exempt (`GET /healthz`, a constant-returning liveness probe). |
+| 6 | No raw `db.` access outside `src/repo/` — lint rule active and passing. | **PASS** | Two independent mechanisms (string-pattern `no-restricted-imports` + resolver-based `eslint-plugin-boundaries`). Proven to *fire*, not merely be configured: a violating file is planted and the error asserted, including in a nested subdirectory. |
+| 7 | `cargo clippy -- -D warnings` and `swiftlint` clean. | **PARTIAL** | clippy PASS on the host **and** `x86_64-pc-windows-msvc` (exit 0, all targets). swiftlint **NOT MEASURED** — not installable here and the app cannot be compiled without the Apple SDK. |
+| + | *(amendment A17)* Against a deliberately malicious relay, key substitution / self-redemption / token replay all fail closed. | **PASS** | Re-attacked after remediation: a relay holding only `routing_id` cannot complete the PSK handshake; replayed and expired tokens are refused; redeem is single-use and atomic. |
 
 ## Measurements
 
 | Metric | Value |
 |---|---|
-| Agent tests (`cargo test --workspace`) | **94 passed, 0 failed, 0 ignored** |
-| Relay tests (`pnpm test`, Node 24.18.1, live Postgres) | **70 passed, 0 failed** (10 files) |
-| clippy, host target, `--all-targets -D warnings` | exit 0 |
-| clippy, `x86_64-pc-windows-msvc`, `--all-targets -D warnings` | exit 0 |
+| Agent tests (`cargo test --workspace`) | **142 passed, 0 failed** |
+| Relay tests (Node 24.18.1, live Postgres) | **70 passed, 0 failed** |
+| clippy — host, `--all-targets -D warnings` | exit 0 |
+| clippy — `x86_64-pc-windows-msvc`, `--all-targets -D warnings` | exit 0 |
 | Relay lint / typecheck | clean / clean |
 | Cross-tenant endpoints covered | **8** (+1 explicitly exempt) |
-| Largest source file | 518 lines (`osprey-svc/src/state.rs`) — under the 600 limit |
-| Protocol registry | 73 message types: 9 fully defined, 64 name-only reservations |
+| `osprey-ffi` → `aarch64-apple-ios` | builds; `Mach-O 64-bit arm64` objects; 20,027,192 B |
+| `osprey-ffi` → `aarch64-apple-ios-sim` | builds |
+| `ring` (C dependency) in the Apple dependency tree | **0** |
+| UniFFI Swift bindings generated on Linux | yes — `osprey_ffi.swift`, 73,285 B |
+| Generated protocol Swift, `swiftc -typecheck -swift-version 6` | **clean** (Swift 6.0.3 for Linux) |
+| iOS app Swift compiled against the Apple SDK | **NOT MEASURED** — no macOS/Xcode |
+| Largest source file | 518 lines — under the 600 limit |
 | Codegen reproducibility | regenerating produces an empty git diff |
-| `ring` (C dependency) in agent tree | 0 |
-| iOS-side anything | **NOT MEASURED** — no macOS, Xcode, or Swift compiler in this environment |
 | Agent idle CPU / RSS | **NOT MEASURED** — a P1 criterion, not P0 |
 
 ### Reproduce
@@ -56,79 +59,97 @@ environment and observed.
 cd agent && cargo test --workspace
 cd agent && cargo clippy --workspace --all-targets -- -D warnings
 cd agent && cargo clippy --workspace --all-targets --target x86_64-pc-windows-msvc -- -D warnings
+cd agent && cargo build -p osprey-ffi --release --target aarch64-apple-ios
 cd relay && pnpm test && pnpm lint && pnpm typecheck     # needs Node >= 24 and Postgres
 cd proto && pnpm generate                                 # then `git diff` must be empty
 ```
 
 ## Deviations from brief
 
-All were approved before implementation and are recorded in the brief's
-amendment log (A1–A19). The load-bearing ones:
+All approved before implementation and recorded as amendments A1–A21 at the end
+of `docs/osprey-build-brief.md`. The load-bearing ones:
 
 - **A4 — the specified crypto was not implementable.** Ed25519 is a signature
-  algorithm, not a DH function; Noise needs both parties on the same DH
+  algorithm, not a DH function; Noise requires both parties on the same DH
   function; and a Secure Enclave key can never be a `snow` static because the
   Enclave never exports a private key. Resolved by keeping the mandated hardware
   identity keys as the pinned root of trust and adding an X25519 Noise static
-  that the identity key cross-signs. Verified before adoption.
-- **A5 — QR pairing was MITM-able by the relay.** The brief's flow put the
-  one-time token and the phone's public key through the untrusted relay. Now the
-  QR carries a `pairing_secret` the relay never sees; the relay only ever holds
+  that each identity key cross-signs.
+- **A5 — QR pairing was MITM-able by the relay.** The QR now carries a
+  `pairing_secret` the relay never sees; the relay holds only
   `routing_id = SHA-256(pairing_secret)`, and the secret is the Noise PSK.
-  Physical-access pairing is now a cryptographic property, not a UX convention.
-- **A8** — P0's pairing entry point is a console binary, because the tray menu
-  the brief assumes lives in a component not built until P1.
-- **A16/A17** — the audit log now records pairing and unpair (it did not), and
-  the gate gained the hostile-relay criterion above.
+  Physical-access pairing became a cryptographic property rather than a UX
+  convention.
+- **A20 — peer verification had to become algorithm-agnostic.** See below.
+- **A8** — P0's pairing entry point is a console binary; the tray menu lives in a
+  component not built until P1.
+- **A16/A17** — the audit log now records pairing and unpair, and the gate gained
+  the hostile-relay criterion.
 
 ## Discovered problems
 
-Adversarial review found these **after** the build reported success. All were
-reproduced with live traffic, all are now fixed, and each fix was confirmed by
-re-exploiting it rather than by reading the diff.
+### Found by adversarial review, after the build reported success
 
-1. **Enrollment rate limit was bypassable by an attacker-supplied header.**
-   `trustProxy: true` made `request.ip` the leftmost `X-Forwarded-For` value,
-   which is the limiter's key. With a limit of 2, eight enrollments with a
-   rotating header all returned 201. That limiter is the *only* structural bound
-   on account creation, since per-account quotas cannot bound the creation of
-   accounts. Fixed to `trustProxy: 1`; re-attack now yields `201 201 429…`.
+All reproduced with live traffic; all fixed; each fix confirmed by re-running the
+original attack rather than by re-reading the diff.
+
+1. **Enrollment rate limit bypassable by an attacker-supplied header.**
+   `trustProxy: true` made `request.ip` the leftmost `X-Forwarded-For` value —
+   the limiter's own key. With a limit of 2, eight enrollments with a rotating
+   header all returned 201. That limiter is the *only* structural bound on
+   account creation, since per-account quotas cannot bound the creation of
+   accounts.
 2. **Unauthenticated cross-tenant write into another tenant's audit log.**
    `POST /v1/pairing/redeem` takes the account id from the request body and, on a
-   miss, wrote an audit row into *that* tenant. 500 requests grew a victim's
-   `audit_relay` by 147 KB. Anyone who ever saw a QR — including a revoked
+   miss, wrote an audit row into *that* tenant: 500 requests grew a victim's
+   `audit_relay` by 147 KB. Anyone who had ever seen a QR — including a revoked
    controller, since the account id never rotates — could bury real security
-   events. Fixed; re-attack shows 500 bogus redeems now write 0 rows.
-3. **`pair.revoke` was specified, scaffolded, and unimplemented.** The agent
-   answered it `unsupported` while `UnpairInitiator::Peer` and
-   `DeviceIdentity::sign` sat with zero callers, so it *looked* done. This was a
-   literal gate criterion with no `TODO(frank):` marking the gap. Now implemented
-   and tested.
-4. **Chunk-count denial of service.** The framing layer bounded reassembled
-   bytes but not chunk count, so authenticated empty-continuation chunks added
-   zero bytes and pinned a session thread indefinitely — 200,000 accepted in
-   12.6 s. Now refused at the first chunk.
-5. **The pairing secret was printed to stdout unconditionally**, behind a comment
-   claiming the caller opted in. It is now behind an explicit flag, default off.
-6. **RLS was one config mistake from silently inert.** No table had `FORCE ROW
-   LEVEL SECURITY`, and the migrator URL silently fell back to the runtime URL.
-   Now forced on all 7 tables, and the relay refuses to boot as an owner or
-   superuser role.
+   events. Now audited only once the caller has proved possession of the QR
+   secret, and rate-limited per IP and per account.
+3. **`pair.revoke` was specified, scaffolded, and unimplemented**, answering
+   `unsupported` while its supporting types sat unused — so it *looked* done.
+   A literal gate criterion, silently half-built, with no `TODO(frank):`.
+4. **Chunk-count denial of service.** The framing layer bounded reassembled bytes
+   but not chunk count, so authenticated empty-continuation chunks added zero
+   bytes and pinned a session thread indefinitely — 200,000 accepted in 12.6 s.
+5. **The pairing secret (the Noise PSK) was printed to stdout unconditionally**,
+   behind a comment claiming the caller had opted in.
+6. **RLS was one configuration mistake from silently inert** — no table forced it
+   and the migrator URL fell back to the runtime URL.
 
-### Carried forward — things that will bite later
+### Found while preparing the iOS side
 
-- **iOS measurement has no home.** Instruments is macOS-only, and cloud Macs
-  cannot attach a physical iPhone over USB. P5/P6 demand measured glass-to-glass
-  latency and memory on the phone. That needs a plan — likely `os_signpost` plus
-  a custom harness — before P5, not during it.
+7. **The agent could not verify a Secure Enclave signature at all.** Verification
+   was Ed25519-only, but the phone's identity key is P-256. Pairing with a real
+   iPhone would have failed on the device with an opaque error. Fixed per
+   amendment A20, including the encodings Apple actually emits: X9.63
+   uncompressed public keys, variable-length ASN.1 DER signatures, and the
+   message hashed once by `SecKeyCreateSignature` rather than twice.
+8. **`FFINoiseEngine.swift` imported a module that does not exist.** It declared
+   `import OspreyFFI`, but UniFFI emits `osprey_ffi.swift`, which the build
+   script adds *directly to the Xcode target* and which itself imports the C shim
+   `osprey_ffiFFI`. Confirmed by generating the real bindings on Linux and
+   typechecking against them. This was a guaranteed first-compile failure on the
+   Mac; removed.
+9. **`project.yml` and `Info.plist` did not exist.** Without them nothing can be
+   generated or built. Both now written and validated as parseable. The plist
+   carries the three load-bearing keys: `NSCameraUsageDescription` (absent → hard
+   crash on first capture), `NSLocalNetworkUsageDescription` (absent → the
+   connection silently never becomes ready) and `NSBonjourServices`.
+
+### Carried forward — will bite later
+
+- **iOS measurement has no home yet.** Instruments is macOS-only and cloud Macs
+  cannot attach a physical iPhone over USB, yet P5/P6 demand measured
+  glass-to-glass latency and memory *on the phone*. Needs a plan — likely
+  `os_signpost` plus a custom harness — before P5, not during it.
 - **`snow` is formally unaudited.** Stated plainly because the whole trust model
-  rests on it. It is the same implementation on both ends, which is why one
-  implementation was chosen over two.
-- **The relay's single-process rate limiters** are in-memory fixed windows. A
-  `TODO(frank):` records the decision needed if 1.0 ever runs more than one
-  relay process.
-- **Redeem remains a tenant-targeted anonymous endpoint by design.** Amplifica-
-  tion is closed and it is rate-limited, but it is inherently reachable by
+  rests on it. It is the same implementation on both ends, which is exactly why
+  one implementation was chosen over two.
+- **The relay's rate limiters are in-process fixed windows.** A `TODO(frank):`
+  records the decision if 1.0 ever runs more than one relay process.
+- **`redeem` is deliberately an anonymous, tenant-targeted endpoint.**
+  Amplification is closed and it is rate-limited, but it remains reachable by
   anyone holding an account id.
 
 ## Open TODO(frank) items encountered
@@ -136,34 +157,31 @@ re-exploiting it rather than by reading the diff.
 | # | Item | Status |
 |---|---|---|
 | 1 | Final product name | **RESOLVED — Osprey** (A1) |
-| 4 | Bundle identifier + APNs key id | **Half resolved** — bundle id `com.osprey.app` (A2). It must still be registered as an App ID in the Apple Developer portal before a provisioning profile can issue. The APNs `.p8` half is genuinely P8. |
-| 5 | Relay domain + VPS | Open, not needed until P5. P0 used a local relay. |
-| 11 | One host or a device list | Open, and **not blocking** — `devices.kind` plus the `pairings` join supports N agents per account without prejudging the UI. |
-| 9, 10, 6, 8, 12, 13 | Indicator style, denylist, sensors, cert, review doc, desktop client | Open, all later phases. |
+| 4 | Bundle identifier + APNs key id | **Half resolved** — `com.osprey.app` (A21). Still to be registered as an App ID; bundle ids are globally unique, so a collision must be resolved *before first pairing* (renaming afterwards invalidates Keychain access groups and forces every device to re-pair). The APNs `.p8` half is genuinely P8. |
+| 5 | Relay domain + VPS | Open; not needed until P5. |
+| 11 | One host or a device list | Open and **not blocking** — `devices.kind` plus the `pairings` join supports N agents per account without prejudging the UI. |
+| 6, 8, 9, 10, 12, 13 | Sensors driver, signing cert, indicator style, denylist, review doc, desktop client | Open, all later phases. |
 
 ## Ready for P1?
 
-**No — finish P0 first.** The remaining work is bounded and well understood:
+**No — finish P0 first.** The remaining work is bounded, and all of it needs the
+cloud Mac. Follow `docs/ios-build.md`.
 
-1. Xcode project (via **XcodeGen**, so the project is a text file in git rather
-   than a binary only Xcode can edit — this matters when authoring off-Mac).
-2. iOS identity: P-256 in the Secure Enclave as the pinned root, cross-signing a
-   Curve25519 Noise static in the Keychain.
-3. `snow` as an XCFramework via UniFFI. **The Rust half is already de-risked** —
-   the crypto core builds to real `Mach-O arm64` for device and simulator from
-   Linux, with zero `ring`, so the Mac only has to package, build Swift, sign,
-   and upload (`artifacts/P0-plan-evidence/ios-crossbuild.md`).
-4. The pairing UI and QR scanner, then criteria 1, 2 and 7 measured for real on
-   the physical iPhone.
+1. Register App ID `com.osprey.app` (resolve a collision now if there is one).
+2. `cd ios/Osprey && xcodegen generate`.
+3. `scripts/build-xcframework.sh` — note the Rust static libraries **and** the
+   UniFFI Swift bindings already build on Linux, so only lipo,
+   `xcodebuild -create-xcframework`, the Swift build, signing and upload need the
+   Mac. That is why the session should be short.
+4. Fix whatever the first real Swift compile surfaces. Expect some churn: 47
+   Swift files have been type-checked only in the narrow sense the Apple SDK's
+   absence permits.
+5. Install to the physical iPhone — fastest loop is a development-signed IPA
+   installed from the Windows PC with Sideloadly over USB; TestFlight for
+   release candidates.
+6. Measure criteria 1, 2 (app half) and 7 (swiftlint) **on the device**. The
+   Simulator cannot substitute: it has neither a camera nor a Secure Enclave.
 
-**The one thing I would want decided first:** whether to register
-`com.osprey.app` as the App ID now. Everything in step 1–4 needs it, and
-changing it after first pairing invalidates Keychain access groups and forces
-every device to re-pair — cheap now, expensive later.
-
-Note on how the iOS loop should run: builds reach the phone over the air, since
-cloud Macs cannot attach a device over USB. Fastest iteration is a
-development-signed IPA installed from the Windows PC with Sideloadly (seconds);
-TestFlight is for release candidates. The Simulator cannot substitute — it has
-neither a camera nor a Secure Enclave, which are precisely what criterion 1
-exercises.
+**The one thing to decide first:** whether `com.osprey.app` is available, because
+every signing artifact downstream depends on it and changing it later forces
+re-pairing.
