@@ -6,6 +6,10 @@ license.workspace = true
 description = "Osprey trust spine: device identity, keystore, Noise channel, pairing, audit."
 
 [dependencies]
+# `IdentityAlgorithm` is generated from proto/messages.toml. Depending on the
+# generated crate rather than declaring a second enum here is what keeps the
+# TOML the single source of truth (CLAUDE.md architecture invariants).
+osprey-proto = { path = "../osprey-proto" }
 thiserror.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true
@@ -23,6 +27,15 @@ snow = { version = "0.10", default-features = false, features = [
 ] }
 ed25519-dalek.workspace = true
 x25519-dalek.workspace = true
+# Verifies a phone's Secure Enclave cross-signature. 0.13 rather than 0.14 on
+# purpose: 0.14 pulls a second generation of the RustCrypto stack (digest 0.11,
+# rand_core 0.10, der 0.8) alongside the one ed25519-dalek already uses, giving
+# the build two copies of the primitives the trust model rests on. Pure Rust
+# either way, so the Apple cross-build stays free of `ring`-style C toolchains.
+p256 = { version = "0.13", default-features = false, features = [
+    "ecdsa",
+    "std",
+] }
 rand_core.workspace = true
 sha2.workspace = true
 zeroize.workspace = true

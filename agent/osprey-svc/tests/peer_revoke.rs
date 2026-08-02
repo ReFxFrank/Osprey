@@ -65,7 +65,15 @@ impl Agent {
             std::thread::spawn(move || {
                 let host = Host::open(layout, "gate-host").expect("reopen host");
                 let mut sink = SharedSink::default();
-                run::execute(&host, &run::RunOptions { port }, running, &mut sink)
+                run::execute(
+                    &host,
+                    &run::RunOptions {
+                        port,
+                        ..Default::default()
+                    },
+                    running,
+                    &mut sink,
+                )
             })
         };
 
@@ -304,7 +312,15 @@ fn a_replayed_nonce_is_refused_even_after_the_operator_re_pairs() {
         std::thread::spawn(move || {
             let host = Host::open(layout, "gate-host").expect("reopen host");
             let mut sink = SharedSink::default();
-            run::execute(&host, &run::RunOptions { port }, running, &mut sink)
+            run::execute(
+                &host,
+                &run::RunOptions {
+                    port,
+                    ..Default::default()
+                },
+                running,
+                &mut sink,
+            )
         })
     };
     {
@@ -339,7 +355,15 @@ fn a_replayed_nonce_is_refused_even_after_the_operator_re_pairs() {
         std::thread::spawn(move || {
             let host = Host::open(layout, "gate-host").expect("reopen host");
             let mut sink = SharedSink::default();
-            run::execute(&host, &run::RunOptions { port }, running, &mut sink)
+            run::execute(
+                &host,
+                &run::RunOptions {
+                    port,
+                    ..Default::default()
+                },
+                running,
+                &mut sink,
+            )
         })
     };
     let mut stream = connect_to_hint(&repaired.payload.lan_hints);

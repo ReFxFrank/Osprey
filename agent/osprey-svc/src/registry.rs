@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use osprey_core::identity::PinnedPeer;
+use osprey_core::identity::{Fingerprint, PinnedPeer};
 
 use crate::state::HostState;
 
@@ -30,7 +30,12 @@ use crate::state::HostState;
 pub const REVOCATION_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 struct LiveSession {
-    identity_pub: [u8; 32],
+    /// Keyed on the peer's identity *fingerprint* rather than its raw key
+    /// bytes: identity keys are now variable-length and algorithm-tagged
+    /// (32-byte Ed25519, 65-byte P-256), and the fingerprint already hashes
+    /// both, so it is the one value that identifies a peer without the
+    /// registry having to know which algorithm it uses.
+    peer: Fingerprint,
     socket: TcpStream,
 }
 
@@ -62,15 +67,9 @@ impl SessionRegistry {
 
     /// Record a live session. `socket` must be a `try_clone` of the session's
     /// stream; it is used only to shut the connection down.
-    pub fn register(self: &Arc<Self>, identity_pub: [u8; 32], socket: TcpStream) -> SessionHandle {
+    pub fn register(self: &Arc<Self>, peer: Fingerprint, socket: TcpStream) -> SessionHandle {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        self.lock().insert(
-            id,
-            LiveSession {
-                identity_pub,
-                socket,
-            },
-        );
+        self.lock().insert(id, LiveSession { peer, socket });
         SessionHandle {
             registry: Arc::clone(self),
             id,
@@ -83,8 +82,8 @@ impl SessionRegistry {
 
     /// Hang up on every session with this peer identity. Returns how many were
     /// closed.
-    pub fn revoke_identity(&self, identity_pub: &[u8; 32]) -> usize {
-        self.shutdown_matching(|session| &session.identity_pub == identity_pub)
+    pub fn revoke_identity(&self, peer: &Fingerprint) -> usize {
+        self.shutdown_matching(|session| &session.peer == peer)
     }
 
     /// Hang up on every session whose peer is not in `allowed`.
@@ -92,7 +91,7 @@ impl SessionRegistry {
         self.shutdown_matching(|session| {
             !allowed
                 .iter()
-                .any(|peer| peer.identity_pub == session.identity_pub)
+                .any(|peer| peer.fingerprint() == session.peer)
         })
     }
 
@@ -170,6 +169,11 @@ mod tests {
     use std::io::Read;
     use std::net::TcpListener;
 
+    /// A distinct fingerprint per `seed`, without generating a keypair.
+    fn fingerprint_of(seed: u8) -> Fingerprint {
+        Fingerprint::of_identity(&osprey_proto::IdentityAlgorithm::Ed25519, &[seed; 32])
+    }
+
     fn connected_pair() -> (TcpStream, TcpStream) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
         let addr = listener.local_addr().expect("addr");
@@ -182,14 +186,14 @@ mod tests {
     fn revoking_an_identity_unblocks_a_blocked_read() {
         let registry = SessionRegistry::new();
         let (mut client, server) = connected_pair();
-        let handle = registry.register([3u8; 32], server.try_clone().expect("clone"));
+        let handle = registry.register(fingerprint_of(3), server.try_clone().expect("clone"));
 
         let reader = std::thread::spawn(move || {
             let mut buf = [0u8; 1];
             client.read(&mut buf)
         });
         std::thread::sleep(Duration::from_millis(50));
-        assert_eq!(registry.revoke_identity(&[3u8; 32]), 1);
+        assert_eq!(registry.revoke_identity(&fingerprint_of(3)), 1);
 
         let result = reader.join().expect("reader thread");
         // The peer sees a clean end-of-stream, not a hang.
@@ -202,8 +206,8 @@ mod tests {
     fn a_different_identity_is_left_alone() {
         let registry = SessionRegistry::new();
         let (_client, server) = connected_pair();
-        let _handle = registry.register([1u8; 32], server);
-        assert_eq!(registry.revoke_identity(&[2u8; 32]), 0);
+        let _handle = registry.register(fingerprint_of(1), server);
+        assert_eq!(registry.revoke_identity(&fingerprint_of(2)), 0);
         assert_eq!(registry.live_count(), 1);
     }
 
@@ -214,8 +218,8 @@ mod tests {
         let (_c2, s2) = connected_pair();
         let kept = PinnedPeer::pin(DeviceIdentity::generate().public()).expect("pin");
         let dropped = PinnedPeer::pin(DeviceIdentity::generate().public()).expect("pin");
-        let _h1 = registry.register(kept.identity_pub, s1);
-        let _h2 = registry.register(dropped.identity_pub, s2);
+        let _h1 = registry.register(kept.fingerprint(), s1);
+        let _h2 = registry.register(dropped.fingerprint(), s2);
         assert_eq!(registry.retain_pinned(&[kept]), 1);
     }
 }

@@ -55,7 +55,7 @@ impl std::fmt::Debug for DeviceToken {
 struct PeerMaterial {
     display_name: String,
     identity_public_key: String,
-    identity_algorithm: &'static str,
+    identity_algorithm: String,
     noise_static_public_key: String,
     noise_static_signature: String,
 }
@@ -64,10 +64,10 @@ impl PeerMaterial {
     fn from_identity(display_name: &str, identity: &PublicIdentity) -> Self {
         Self {
             display_name: display_name.to_owned(),
-            identity_public_key: BASE64.encode(identity.identity_pub),
-            identity_algorithm: "ed25519",
+            identity_public_key: BASE64.encode(&identity.identity_pub),
+            identity_algorithm: identity.identity_algorithm.to_string(),
             noise_static_public_key: BASE64.encode(identity.noise_static_pub),
-            noise_static_signature: BASE64.encode(identity.noise_static_sig),
+            noise_static_signature: BASE64.encode(&identity.noise_static_sig),
         }
     }
 }
@@ -212,7 +212,7 @@ impl RelayClient {
     pub fn find_device_by_identity(
         &self,
         token: &DeviceToken,
-        identity_pub: &[u8; 32],
+        identity_pub: &[u8],
     ) -> Result<Option<Uuid>> {
         let mut response = self
             .agent

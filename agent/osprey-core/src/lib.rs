@@ -22,6 +22,6 @@ pub mod pairing;
 
 #[path = "hexser.rs"]
 mod hexser;
-pub(crate) use hexser::{hex32, hex64};
+pub(crate) use hexser::{hex32, hexbytes};
 
 pub use error::{Error, Result};

@@ -7,6 +7,7 @@ use anyhow::{bail, Context, Result};
 use osprey_core::identity::PinnedPeer;
 use osprey_core::pairing::{self, PairingOffer, PairingSecret, QrPayload, DEFAULT_PAIRING_TTL};
 
+use crate::discovery::Advertisement;
 use crate::host::Host;
 use crate::lan::{LanListener, DEFAULT_LAN_PORT};
 use crate::qrterm;
@@ -31,6 +32,11 @@ pub struct PairOptions {
     pub lan_only: bool,
     pub port: u16,
     pub ttl: Duration,
+    /// Publish `_osprey._tcp` on the LAN while the pairing window is open, so a
+    /// phone whose scan happened after the host's address changed can still
+    /// reach it. Off by default here and on in the CLI — see
+    /// [`crate::commands::run::RunOptions::advertise_mdns`].
+    pub advertise_mdns: bool,
     /// Also print the QR's decoded JSON, which contains the pairing secret.
     /// Off unless the operator asks (see [`print_offer`]).
     pub print_payload: bool,
@@ -44,6 +50,7 @@ impl Default for PairOptions {
             lan_only: false,
             port: DEFAULT_LAN_PORT,
             ttl: DEFAULT_PAIRING_TTL,
+            advertise_mdns: false,
             print_payload: false,
         }
     }
@@ -130,6 +137,14 @@ pub fn execute(host: &mut Host, options: &PairOptions, out: &mut dyn Write) -> R
         offer.secret().clone(),
     );
     print_offer(&payload, &listener, options.print_payload, out)?;
+
+    // Scoped to the pairing window and dropped before this function returns, so
+    // the record never outlives the listener it points at.
+    let _advertisement = Advertisement::publish(
+        options.advertise_mdns,
+        host.state.device_id(),
+        listener.addresses(),
+    );
 
     let peer = accept_one(host, &listener, &mut offer, options.ttl)?;
     let paired = PairedPeer {

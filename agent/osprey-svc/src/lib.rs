@@ -21,6 +21,7 @@
 
 pub mod cli;
 pub mod commands;
+pub mod discovery;
 pub mod host;
 pub mod lan;
 pub mod paths;

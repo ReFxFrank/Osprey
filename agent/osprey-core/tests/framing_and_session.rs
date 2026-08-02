@@ -188,7 +188,7 @@ fn steady_state_ik_session_uses_the_pinned_statics() {
             let (peer, mut session) = channel::accept(&mut agent_stream, agent, &allowed)?;
             let request = session.recv(&mut agent_stream)?;
             session.send(b"pong", &mut agent_stream)?;
-            Ok::<_, Error>((peer.identity_pub, request))
+            Ok::<_, Error>((peer.identity_pub.clone(), request))
         })();
         (host, handle.join().expect("phone thread"))
     });

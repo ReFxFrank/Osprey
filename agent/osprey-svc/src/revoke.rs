@@ -162,7 +162,7 @@ impl<'a> RevocationHandler<'a> {
     /// within its poll interval regardless; doing it here makes "immediate"
     /// (brief §6.1) literal rather than approximate.
     pub fn close_peer_sessions(&self, peer: &PinnedPeer) -> usize {
-        self.registry.revoke_identity(&peer.identity_pub)
+        self.registry.revoke_identity(&peer.fingerprint())
     }
 
     fn remove_pin(

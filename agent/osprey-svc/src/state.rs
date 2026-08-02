@@ -25,7 +25,14 @@ use uuid::Uuid;
 /// Version 2 added the pin's cross-signature and the consumed-revocation list.
 /// A version 1 file has no signature to re-verify, so it is rejected rather than
 /// upgraded — the whole point of the field is that it cannot be assumed.
-pub const STATE_VERSION: u32 = 2;
+///
+/// Version 3 added `identity_algorithm` to every pin and made the identity key
+/// and its cross-signature variable-length, because a phone's root of trust is a
+/// P-256 Secure Enclave key rather than an Ed25519 one. A version 2 pin does not
+/// say which algorithm it is, and guessing is precisely the inference this
+/// change exists to remove, so such a file is rejected and the controller
+/// re-paired.
+pub const STATE_VERSION: u32 = 3;
 
 /// Keystore label under which the relay device token is sealed.
 pub const RELAY_TOKEN_LABEL: &str = "relay-device-token";
@@ -149,6 +156,12 @@ impl std::fmt::Display for PeerSelector {
     }
 }
 
+/// Just enough of the state file to learn its schema version.
+#[derive(Deserialize)]
+struct StateVersionProbe {
+    version: u32,
+}
+
 /// The on-disk state, loaded into memory.
 #[derive(Debug)]
 pub struct HostState {
@@ -165,15 +178,23 @@ pub struct HostState {
 /// substituted `noise_static_pub` — which is exactly the value that decides
 /// which key may open a session.
 fn parse_state(path: &Path, bytes: &[u8]) -> Result<StateFile> {
-    let file: StateFile = serde_json::from_slice(bytes)
+    // The version is read on its own first. A file written by an older build
+    // fails to deserialise into the *current* `StateFile` — a field it never
+    // had is now required — so a single full parse would report that as
+    // "not valid Osprey state" and send the operator looking for corruption
+    // instead of telling them the schema moved.
+    let probe: StateVersionProbe = serde_json::from_slice(bytes)
         .with_context(|| format!("{} is not valid Osprey state", path.display()))?;
-    if file.version != STATE_VERSION {
+    if probe.version != STATE_VERSION {
         return Err(anyhow!(
-            "{} is schema version {}, this build writes version {STATE_VERSION}",
+            "{} is schema version {}, this build writes version {STATE_VERSION}; \
+             re-pair the controller",
             path.display(),
-            file.version
+            probe.version
         ));
     }
+    let file: StateFile = serde_json::from_slice(bytes)
+        .with_context(|| format!("{} is not valid Osprey state", path.display()))?;
     for peer in &file.peers {
         peer.pinned.verify().with_context(|| {
             format!(
@@ -274,7 +295,7 @@ impl HostState {
     pub fn add_peer(&mut self, peer: PairedPeer) -> Result<()> {
         self.file
             .peers
-            .retain(|existing| existing.pinned.identity_pub != peer.pinned.identity_pub);
+            .retain(|existing| existing.fingerprint() != peer.fingerprint());
         self.file.peers.push(peer);
         self.save()
     }
@@ -368,6 +389,30 @@ impl HostState {
 mod tests {
     use super::*;
     use osprey_core::identity::DeviceIdentity;
+
+    #[test]
+    fn a_state_file_from_an_older_schema_names_the_version_rather_than_looking_corrupt() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("state.json");
+        // A version-2 file: the pin has no `identity_algorithm`, which the
+        // current `PinnedPeer` requires. Without the version probe this reads as
+        // malformed JSON rather than as an out-of-date schema.
+        let older = serde_json::json!({
+            "version": STATE_VERSION - 1,
+            "device_id": Uuid::new_v4(),
+            "display_name": "old-host",
+            "peers": [],
+            "consumed_revocations": []
+        });
+        fs::write(&path, serde_json::to_vec(&older).expect("encode")).expect("write");
+
+        let err = HostState::load(&path).expect_err("an older schema must be refused");
+        let text = format!("{err:#}");
+        assert!(
+            text.contains("schema version 2") && text.contains("version 3"),
+            "the error must name both versions, got: {text}"
+        );
+    }
 
     /// A pin from a real identity. Distinctness comes from the generated key, not
     /// from an edited byte: since the pin now re-verifies its own

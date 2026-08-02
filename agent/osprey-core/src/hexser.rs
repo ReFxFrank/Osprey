@@ -32,4 +32,22 @@ macro_rules! hex_array_module {
 }
 
 hex_array_module!(hex32, 32);
-hex_array_module!(hex64, 64);
+
+/// Hex adapter for key material whose length depends on the algorithm — an
+/// Ed25519 identity key is 32 bytes, a P-256 one is 65, and an ECDSA signature
+/// is variable-length DER. Length is checked by the verifier that knows the
+/// algorithm, never here.
+pub mod hexbytes {
+    use serde::de::{Error as _, Unexpected};
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(value: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&hex::encode(value))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        hex::decode(&text)
+            .map_err(|_| D::Error::invalid_value(Unexpected::Str(&text), &"hex string"))
+    }
+}

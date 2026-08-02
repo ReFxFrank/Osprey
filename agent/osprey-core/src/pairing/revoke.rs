@@ -34,9 +34,6 @@ pub const REVOKE_CONTEXT: &[u8] = b"osprey/pair.revoke/v1";
 /// Anti-replay nonce length, fixed by the protocol.
 pub const REVOKE_NONCE_LEN: usize = 32;
 
-/// Ed25519 signature length.
-const REVOKE_SIGNATURE_LEN: usize = 64;
-
 /// How far `issued_at` may sit either side of the receiver's clock.
 ///
 /// TODO(frank): this window is also the retention period the nonce store has to
@@ -52,7 +49,10 @@ pub const REVOKE_CLOCK_WINDOW: Duration = Duration::from_secs(300);
 /// outcome, not a log line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RevocationRejection {
-    /// `nonce` or `signature` is not the length the protocol fixes.
+    /// `nonce` is not the length the protocol fixes. The signature's length is
+    /// not checked here — it is algorithm-dependent (64 raw bytes for Ed25519,
+    /// variable-length DER for a Secure Enclave P-256 key), so it is the
+    /// verifier for the peer's pinned algorithm that decides.
     Malformed,
     /// The revocation names an issuer other than the peer on this session.
     WrongIssuer,
@@ -136,8 +136,6 @@ pub fn verify_revocation(
 ) -> Result<[u8; REVOKE_NONCE_LEN], RevocationRejection> {
     let nonce = <[u8; REVOKE_NONCE_LEN]>::try_from(revocation.nonce)
         .map_err(|_| RevocationRejection::Malformed)?;
-    let signature = <[u8; REVOKE_SIGNATURE_LEN]>::try_from(revocation.signature)
-        .map_err(|_| RevocationRejection::Malformed)?;
 
     if revocation.issuer_device_id != check.peer_device_id {
         return Err(RevocationRejection::WrongIssuer);
@@ -165,8 +163,16 @@ pub fn verify_revocation(
         revocation.issued_at_ms,
         &nonce,
     );
-    verify_identity_signature(&check.peer.identity_pub, &message, &signature)
-        .map_err(|_| RevocationRejection::BadSignature)?;
+    // Algorithm comes from the pin, not from the message: a revocation that
+    // named its own algorithm would let a peer choose the scheme its signature
+    // is checked under.
+    verify_identity_signature(
+        &check.peer.identity_algorithm,
+        &check.peer.identity_pub,
+        &message,
+        revocation.signature,
+    )
+    .map_err(|_| RevocationRejection::BadSignature)?;
 
     Ok(nonce)
 }

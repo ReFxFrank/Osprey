@@ -28,6 +28,12 @@ ctrlc = "3"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 qrcode = { version = "0.14", default-features = false }
 if-addrs = "0.15"
+# LAN service discovery (amendment A6). Chosen over `zeroconf`/`astro-dnssd`
+# because those bind the platform Bonjour/Avahi daemon through C FFI, which
+# would put a C toolchain back in the cross-compile path; mdns-sd is pure Rust
+# and carries no async runtime. Default features off: they only add a `flume`
+# async channel this crate never awaits.
+mdns-sd = { version = "0.20", default-features = false }
 # `rustls` is not an option here: ureq's rustls path pulls `ring`, whose build
 # script shells out to `lib.exe`, which breaks `--target x86_64-pc-windows-msvc`
 # from Linux CI outright (measured: "failed to find tool \"lib.exe\""). This is

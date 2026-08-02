@@ -86,7 +86,15 @@ fn pair_then_session_then_unpair_blocks_the_next_connection() {
         std::thread::spawn(move || {
             let host = Host::open(layout, "gate-host").expect("reopen host");
             let mut sink = SharedSink::default();
-            run::execute(&host, &run::RunOptions { port }, running, &mut sink)
+            run::execute(
+                &host,
+                &run::RunOptions {
+                    port,
+                    ..Default::default()
+                },
+                running,
+                &mut sink,
+            )
         })
     };
 
@@ -191,7 +199,15 @@ fn an_unknown_controller_is_refused_a_session() {
         std::thread::spawn(move || {
             let host = Host::open(layout, "gate-host").expect("reopen host");
             let mut sink = SharedSink::default();
-            run::execute(&host, &run::RunOptions { port }, running, &mut sink)
+            run::execute(
+                &host,
+                &run::RunOptions {
+                    port,
+                    ..Default::default()
+                },
+                running,
+                &mut sink,
+            )
         })
     };
 
@@ -248,7 +264,15 @@ fn a_connection_accepted_before_an_unpair_is_refused_after_it() {
         std::thread::spawn(move || {
             let host = Host::open(layout, "gate-host").expect("reopen host");
             let mut sink = SharedSink::default();
-            run::execute(&host, &run::RunOptions { port }, running, &mut sink)
+            run::execute(
+                &host,
+                &run::RunOptions {
+                    port,
+                    ..Default::default()
+                },
+                running,
+                &mut sink,
+            )
         })
     };
 

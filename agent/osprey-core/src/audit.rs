@@ -139,7 +139,10 @@ mod tests {
         let event = AuditEvent::Unpaired {
             account_id: "acct".into(),
             device_id: "dev".into(),
-            peer_fingerprint: Fingerprint::of_identity(&[1u8; 32]),
+            peer_fingerprint: Fingerprint::of_identity(
+                &osprey_proto::IdentityAlgorithm::Ed25519,
+                &[1u8; 32],
+            ),
             initiated_by: UnpairInitiator::Host,
         };
         log.record(&event).expect("first");

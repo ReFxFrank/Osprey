@@ -35,24 +35,39 @@ impl fmt::Display for HandshakeStage {
 }
 
 /// Why a peer's cross-signed Noise static was refused.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Not `Copy`: [`Self::UnsupportedAlgorithm`] keeps the algorithm string the
+/// peer actually sent, so an audit entry names the value that was refused rather
+/// than just the fact that something was.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CrossSignatureFailure {
-    /// The 64 signature bytes are not a well-formed Ed25519 signature.
+    /// The signature bytes are not a well-formed signature for the algorithm —
+    /// wrong length for Ed25519, or not parseable ASN.1 DER for P-256.
     Malformed,
     /// Well-formed, but does not verify under the pinned identity key.
     NotSignedByIdentity,
-    /// The pinned identity key bytes are not a valid Ed25519 public key.
+    /// The identity key bytes are not a valid public key for the algorithm.
     BadIdentityKey,
+    /// The peer named an identity algorithm this build cannot verify. Refused
+    /// explicitly rather than accepted, because an unverifiable cross-signature
+    /// is indistinguishable from a forged one.
+    UnsupportedAlgorithm(String),
 }
 
 impl fmt::Display for CrossSignatureFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = match self {
-            Self::Malformed => "malformed signature encoding",
-            Self::NotSignedByIdentity => "signature does not verify under the pinned identity key",
-            Self::BadIdentityKey => "pinned identity key is not a valid Ed25519 public key",
-        };
-        f.write_str(s)
+        match self {
+            Self::Malformed => f.write_str("malformed signature encoding"),
+            Self::NotSignedByIdentity => {
+                f.write_str("signature does not verify under the pinned identity key")
+            }
+            Self::BadIdentityKey => {
+                f.write_str("identity key is not a valid public key for its algorithm")
+            }
+            Self::UnsupportedAlgorithm(raw) => {
+                write!(f, "unsupported identity algorithm {raw:?}")
+            }
+        }
     }
 }
 

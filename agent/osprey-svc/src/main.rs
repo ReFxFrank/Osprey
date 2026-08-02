@@ -29,6 +29,7 @@ fn main() -> Result<()> {
             lan_only,
             port,
             ttl,
+            no_mdns,
             print_payload,
         } => {
             let options = pair::PairOptions {
@@ -37,19 +38,24 @@ fn main() -> Result<()> {
                 lan_only,
                 port,
                 ttl: Command::pairing_ttl(ttl),
+                advertise_mdns: !no_mdns,
                 print_payload,
             };
             pair::execute(&mut host, &options, &mut out)?;
             Ok(())
         }
-        Command::Run { port } => {
+        Command::Run { port, no_mdns } => {
             let running = Arc::new(AtomicBool::new(true));
             let flag = Arc::clone(&running);
             // Ctrl-C stops the accept loop, hangs up on live sessions and joins
             // the revocation watcher, rather than terminating mid-write.
             ctrlc::set_handler(move || flag.store(false, Ordering::Relaxed))
                 .context("could not install the Ctrl-C handler")?;
-            run::execute(&host, &run::RunOptions { port }, running, &mut out)
+            let options = run::RunOptions {
+                port,
+                advertise_mdns: !no_mdns,
+            };
+            run::execute(&host, &options, running, &mut out)
         }
         Command::Unpair { target } => {
             let selector = PeerSelector::parse(&target)?;

@@ -2,6 +2,7 @@
 
 use osprey_core::error::{CrossSignatureFailure, Error};
 use osprey_core::identity::{verify_cross_signature, DeviceIdentity, PinnedPeer};
+use osprey_proto::IdentityAlgorithm;
 
 // The dev backend is deliberately compiled out on Windows so it cannot be
 // selected on the platform that has DPAPI, so the tests that exercise it must
@@ -15,6 +16,7 @@ fn a_valid_cross_signature_verifies() {
     let identity = DeviceIdentity::generate();
     let public = identity.public();
     verify_cross_signature(
+        &public.identity_algorithm,
         &public.identity_pub,
         &public.noise_static_pub,
         &public.noise_static_sig,
@@ -33,6 +35,7 @@ fn a_static_signed_by_a_different_identity_is_rejected() {
     // The impostor's static, vouched for by the impostor, presented under the
     // real device's identity key: the substitution a hostile relay would try.
     let err = verify_cross_signature(
+        &IdentityAlgorithm::Ed25519,
         &real.public().identity_pub,
         &impostor.public().noise_static_pub,
         &impostor.public().noise_static_sig,
@@ -65,6 +68,7 @@ fn a_malformed_identity_key_is_a_typed_error_not_a_panic() {
     let mut bogus = [0u8; 32];
     bogus[31] = 0x80;
     let err = verify_cross_signature(
+        &IdentityAlgorithm::Ed25519,
         &bogus,
         &identity.public().noise_static_pub,
         &identity.public().noise_static_sig,

@@ -52,6 +52,10 @@ pub enum Command {
         #[arg(long, default_value_t = DEFAULT_PAIRING_TTL.as_secs(), value_name = "SECONDS")]
         ttl: u64,
 
+        /// Do not advertise `_osprey._tcp` on the LAN while pairing.
+        #[arg(long)]
+        no_mdns: bool,
+
         /// Also print the QR's decoded JSON. It contains the pairing secret, so
         /// it persists in scrollback and in anything capturing stdout — ask for
         /// it only when a scan is impossible.
@@ -63,6 +67,14 @@ pub enum Command {
     Run {
         #[arg(long, default_value_t = DEFAULT_LAN_PORT)]
         port: u16,
+
+        /// Do not advertise `_osprey._tcp` on the LAN.
+        ///
+        /// Advertising is on by default because it is the discovery path that
+        /// survives the host changing address (amendment A6); without it a
+        /// paired phone is limited to the addresses frozen into its QR scan.
+        #[arg(long)]
+        no_mdns: bool,
     },
 
     /// Revoke a controller. Takes effect locally and immediately.
@@ -100,6 +112,20 @@ mod tests {
             "https://relay.example",
         ]);
         assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn mdns_is_on_unless_the_operator_turns_it_off() {
+        let on = Cli::try_parse_from(["osprey-svc", "run"]).expect("parse");
+        assert!(matches!(on.command, Command::Run { no_mdns: false, .. }));
+        let off = Cli::try_parse_from(["osprey-svc", "run", "--no-mdns"]).expect("parse");
+        assert!(matches!(off.command, Command::Run { no_mdns: true, .. }));
+        let paired_off =
+            Cli::try_parse_from(["osprey-svc", "pair", "--lan-only", "--no-mdns"]).expect("parse");
+        assert!(matches!(
+            paired_off.command,
+            Command::Pair { no_mdns: true, .. }
+        ));
     }
 
     #[test]

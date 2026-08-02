@@ -1,0 +1,42 @@
+[package]
+name = "osprey-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "UniFFI bridge exposing osprey-core's Noise/pairing spine to the iOS client."
+
+[lib]
+# `staticlib` is what the XCFramework packages; `lib` is what the tests link
+# against. Deliberately no `cdylib`: a cdylib for an Apple target needs a real
+# Mach-O linker, which is exactly what this repo cannot run off macOS. Nothing
+# needs one — uniffi's library mode reads its metadata straight out of the iOS
+# `.a`, so the bindings are generated from the artifact that actually ships.
+crate-type = ["staticlib", "lib"]
+
+[dependencies]
+osprey-core = { path = "../osprey-core" }
+osprey-proto = { path = "../osprey-proto" }
+# default-features = false drops uniffi's `cargo-metadata` feature, which is
+# only consulted by the bindings generator. Keeping it out of the library build
+# keeps cargo_metadata/semver/camino off the iOS device target.
+uniffi = { version = "0.32", default-features = false }
+thiserror.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+# Stands in for an iPhone's Secure Enclave: the tests need a P-256 identity that
+# signs a cross-certificate, which is what a real phone would do in Swift.
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
+tempfile = "3"
+
+[features]
+# The bindings generator is a host-only tool. Gating it keeps `cargo build
+# --target aarch64-apple-ios` from trying to link an executable for a device.
+bindgen-cli = ["uniffi/cli"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen-cli"]

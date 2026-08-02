@@ -63,7 +63,7 @@ pub fn execute(
     let sessions_closed = removed
         .iter()
         .map(|peer| match registry {
-            Some(registry) => registry.revoke_identity(&peer.pinned.identity_pub),
+            Some(registry) => registry.revoke_identity(&peer.fingerprint()),
             None => 0,
         })
         .sum();

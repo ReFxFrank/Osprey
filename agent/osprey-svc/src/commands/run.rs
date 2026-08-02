@@ -11,6 +11,7 @@ use anyhow::{bail, Context, Result};
 use osprey_core::channel;
 use osprey_core::identity::{DeviceIdentity, PinnedPeer};
 
+use crate::discovery::Advertisement;
 use crate::host::Host;
 use crate::lan::{LanListener, DEFAULT_LAN_PORT};
 use crate::registry::{spawn_revocation_watcher, SessionRegistry, REVOCATION_POLL_INTERVAL};
@@ -29,12 +30,20 @@ const SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 #[derive(Debug, Clone)]
 pub struct RunOptions {
     pub port: u16,
+    /// Publish `_osprey._tcp` on the LAN while listening (amendment A6).
+    ///
+    /// Defaults to **off** here and to **on** in the CLI, on purpose. Every
+    /// in-process caller of this function is a test that runs both peers over
+    /// loopback, and none of them should open a multicast socket or put a
+    /// record on whatever network the machine running CI happens to be on.
+    pub advertise_mdns: bool,
 }
 
 impl Default for RunOptions {
     fn default() -> Self {
         Self {
             port: DEFAULT_LAN_PORT,
+            advertise_mdns: false,
         }
     }
 }
@@ -53,6 +62,13 @@ pub fn execute(
         bail!("no controller is paired; run `osprey-svc pair` at this machine first");
     }
     let listener = LanListener::bind(options.port)?;
+    // Held for the whole accept loop; dropping it deregisters the record, which
+    // is why the binding is named rather than discarded.
+    let _advertisement = Advertisement::publish(
+        options.advertise_mdns,
+        host.state.device_id(),
+        listener.addresses(),
+    );
     let registry = SessionRegistry::new();
     let watcher = spawn_revocation_watcher(
         host.layout.state.clone(),
@@ -167,9 +183,7 @@ fn serve_one(session: &Session<'_>, mut stream: TcpStream, peer_addr: SocketAddr
     let shutdown_handle = stream
         .try_clone()
         .context("could not duplicate the session socket for revocation")?;
-    let _live = session
-        .registry
-        .register(peer.identity_pub, shutdown_handle);
+    let _live = session.registry.register(fingerprint, shutdown_handle);
 
     let current = HostState::read_peers(session.state_path)
         .with_context(|| format!("could not re-check the pin store for {peer_addr}"))?;
