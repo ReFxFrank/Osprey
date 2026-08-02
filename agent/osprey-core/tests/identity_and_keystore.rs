@@ -2,6 +2,12 @@
 
 use osprey_core::error::{CrossSignatureFailure, Error};
 use osprey_core::identity::{verify_cross_signature, DeviceIdentity, PinnedPeer};
+
+// The dev backend is deliberately compiled out on Windows so it cannot be
+// selected on the platform that has DPAPI, so the tests that exercise it must
+// disappear there too. The cross-signature tests below are platform-independent
+// and still run on every target.
+#[cfg(not(windows))]
 use osprey_core::keystore::{DevFileKeystore, Keystore};
 
 #[test]
@@ -100,6 +106,7 @@ fn rotation_offered_by_a_different_identity_is_refused() {
 }
 
 #[test]
+#[cfg(not(windows))]
 fn dev_keystore_survives_a_save_load_cycle() {
     let dir = tempfile::tempdir().expect("tempdir");
     let keystore = DevFileKeystore::open(dir.path()).expect("open keystore");
@@ -127,6 +134,7 @@ fn dev_keystore_survives_a_save_load_cycle() {
 }
 
 #[test]
+#[cfg(not(windows))]
 fn keystore_delete_removes_the_identity_and_is_idempotent() {
     let dir = tempfile::tempdir().expect("tempdir");
     let keystore = DevFileKeystore::open(dir.path()).expect("open keystore");
@@ -137,6 +145,7 @@ fn keystore_delete_removes_the_identity_and_is_idempotent() {
 }
 
 #[test]
+#[cfg(not(windows))]
 fn keystore_rejects_a_traversing_label() {
     let dir = tempfile::tempdir().expect("tempdir");
     let keystore = DevFileKeystore::open(dir.path()).expect("open keystore");
