@@ -1,0 +1,274 @@
+# Everything Osprey can verify without an Apple machine.
+#
+# ACTION PINNING: only first-party `actions/*` are used, pinned to major tags.
+# Full 40-hex SHA pins are stricter and are the intended end state, but this
+# file was authored in an environment with no network access to github.com, and
+# a fabricated SHA fails the run in a way that looks like a supply-chain
+# incident. TODO(frank): decide whether to SHA-pin these three actions; if yes,
+# resolve the SHAs for actions/checkout@v4, actions/setup-node@v4 and
+# actions/cache@v4 on a networked machine and substitute them here.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A second push to the same branch makes the first run's result irrelevant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # A dependency that fails to fetch should fail, not hang a 6-hour job slot.
+  CARGO_NET_RETRY: 3
+  RUSTUP_MAX_RETRIES: 3
+
+jobs:
+  # --------------------------------------------------------------------------
+  rust:
+    name: agent — test + clippy (host and windows-msvc)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy --no-self-update
+          rustup default stable
+          # Windows is the target platform. Clippy is check-based, so it needs
+          # the std for the target but never the MSVC linker — and this exact
+          # command has already caught a break invisible on a Linux-only run.
+          rustup target add x86_64-pc-windows-msvc
+          rustc --version && cargo clippy --version
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            agent/target
+          key: cargo-rust-${{ runner.os }}-${{ hashFiles('agent/Cargo.lock') }}
+          restore-keys: cargo-rust-${{ runner.os }}-
+
+      - name: cargo test --workspace
+        working-directory: agent
+        run: cargo test --workspace
+
+      - name: clippy (host)
+        working-directory: agent
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: clippy (x86_64-pc-windows-msvc)
+        working-directory: agent
+        run: cargo clippy --workspace --all-targets --target x86_64-pc-windows-msvc -- -D warnings
+
+  # --------------------------------------------------------------------------
+  apple-cross:
+    name: osprey-ffi — Apple cross-build + ring regression guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the toolchain and Apple targets
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          # No Apple SDK is involved: a Rust `staticlib` is assembled by `ar`,
+          # not by a linker, so rustc emits real Mach-O arm64 objects here.
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            agent/target
+          key: cargo-apple-${{ runner.os }}-${{ hashFiles('agent/Cargo.lock') }}
+          restore-keys: cargo-apple-${{ runner.os }}-
+
+      - name: Build the device and simulator slices
+        working-directory: agent
+        run: |
+          cargo build -p osprey-ffi --target aarch64-apple-ios
+          cargo build -p osprey-ffi --target aarch64-apple-ios-sim
+
+      # THE POINT OF THIS JOB.
+      #
+      # snow 0.10's default `std` feature declares `ring/std` without the `?`
+      # weak-dependency marker, so enabling `std` pulls in ring — a C library
+      # that cannot cross-compile to Apple targets from here (and needs lib.exe
+      # on Windows). osprey-core therefore takes snow with
+      # default-features = false and the pure-Rust resolver.
+      #
+      # Nothing about that is self-enforcing. One `default-features` deleted in
+      # a routine dependency bump silently restores ring, and the failure does
+      # not surface until an iOS build on a Mac. This step is the tripwire.
+      - name: Assert ring is absent from the Apple dependency trees
+        working-directory: agent
+        run: |
+          set -euo pipefail
+          for target in aarch64-apple-ios aarch64-apple-ios-sim; do
+            # normal+build edges only: dev-dependencies never ship to the phone.
+            cargo tree -p osprey-ffi --target "$target" \
+              --edges normal,build --prefix none --format '{p}' > "/tmp/tree-$target.txt"
+
+            # Sanity check before trusting a negative grep: if `cargo tree` had
+            # failed or emitted nothing, "ring is absent" would be vacuously
+            # true and this guard would silently stop guarding.
+            grep -q '^snow v' "/tmp/tree-$target.txt" \
+              || { echo "::error::dependency tree for $target looks wrong — snow not found"; exit 1; }
+
+            if grep -E '^ring v' "/tmp/tree-$target.txt"; then
+              echo "::error::ring reappeared in the $target dependency tree."
+              echo "ring is a C dependency and cannot cross-compile to Apple targets."
+              echo "Most likely cause: a crate (usually snow) regained its default 'std' feature."
+              echo "Fix the dependency edit rather than this check."
+              exit 1
+            fi
+            echo "ok: no ring in $target ($(wc -l < "/tmp/tree-$target.txt") packages)"
+          done
+
+  # --------------------------------------------------------------------------
+  relay:
+    name: relay — migrate, test, lint, typecheck
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          # The suite connects as `postgres` and as `osprey_app` with no
+          # password (relay/test/support/pg.ts builds passwordless URLs), and
+          # src/db/migrate.ts only sets a role password when OSPREY_APP_PASSWORD
+          # is present. trust auth is what makes those URLs work; it is
+          # acceptable only because this cluster is per-job and unreachable.
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: osprey_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # 127.0.0.1, not localhost: the mapped service port is bound on IPv4, and
+      # Node 17+ resolves localhost verbatim, so ::1 can win and refuse.
+      OSPREY_TEST_PG_HOST: 127.0.0.1
+      OSPREY_TEST_PG_PORT: '5432'
+      OSPREY_TEST_PG_OWNER: postgres
+      OSPREY_TEST_PG_DATABASE: osprey_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: relay/.nvmrc
+
+      - name: Install pnpm
+        # Pinned to the version relay/package.json declares in `packageManager`,
+        # so pnpm's own version management is a no-op rather than a download.
+        run: npm install --global pnpm@10.33.0
+
+      - name: Locate the pnpm store
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-relay-${{ runner.os }}-${{ hashFiles('relay/pnpm-lock.yaml') }}
+          restore-keys: pnpm-relay-${{ runner.os }}-
+
+      - name: Install dependencies
+        working-directory: relay
+        run: pnpm install --frozen-lockfile
+
+      # The suite's globalSetup recreates `osprey_test` and migrates it itself,
+      # so this step is not setup for the tests — it is a separate assertion
+      # that the standalone migration path (roles.sql -> drizzle -> grants.sql)
+      # runs clean against a fresh database, which nothing else covers.
+      - name: Run migrations standalone
+        working-directory: relay
+        env:
+          DATABASE_URL_MIGRATOR: postgres://postgres@127.0.0.1:5432/osprey_ci
+        run: pnpm db:migrate
+
+      - name: pnpm test
+        working-directory: relay
+        run: pnpm test
+
+      - name: pnpm lint
+        working-directory: relay
+        run: pnpm lint
+
+      - name: pnpm typecheck
+        working-directory: relay
+        run: pnpm typecheck
+
+  # --------------------------------------------------------------------------
+  proto-drift:
+    name: proto — generated Rust and Swift match messages.toml
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install pnpm
+        run: npm install --global pnpm@10.33.0
+
+      - name: Locate the pnpm store
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-proto-${{ runner.os }}-${{ hashFiles('proto/pnpm-lock.yaml') }}
+          restore-keys: pnpm-proto-${{ runner.os }}-
+
+      - name: Install dependencies
+        working-directory: proto
+        run: pnpm install --frozen-lockfile
+
+      - name: Regenerate
+        working-directory: proto
+        run: pnpm generate
+
+      # messages.toml is the single source of truth; the Rust and Swift types
+      # are outputs. Hand-editing a generated file is the failure this catches.
+      - name: Assert no drift
+        run: |
+          set -euo pipefail
+          # Two checks, because they catch different things: `git diff` sees
+          # modified tracked files, `git status` also sees a newly *added*
+          # generated file that the committer forgot.
+          if ! git diff --exit-code; then
+            echo "::error::generated protocol code differs from proto/messages.toml."
+            echo "Run 'cd proto && pnpm generate' and commit the result."
+            exit 1
+          fi
+          untracked="$(git status --porcelain --untracked-files=normal)"
+          if [ -n "$untracked" ]; then
+            echo "::error::codegen produced files that are not committed:"
+            echo "$untracked"
+            exit 1
+          fi

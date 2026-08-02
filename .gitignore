@@ -4,3 +4,6 @@ dist/
 .DS_Store
 *.log
 relay/.env
+
+# Staged build output: XCFramework + generated UniFFI binding
+ios/Osprey/Frameworks/

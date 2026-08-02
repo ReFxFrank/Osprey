@@ -1,0 +1,510 @@
+# iOS: XCFramework, app build, and the TestFlight path to the physical iPhone.
+#
+# ===========================================================================
+# WHY THIS DOES NOT RUN ON EVERY PUSH
+#
+# GitHub bills macOS runners at a 10x minute multiplier against the account's
+# included minutes; Linux is 1x. This workflow also does real work — a release
+# cross-build of osprey-ffi for three Apple targets, XcodeGen, a full Xcode
+# build, and optionally an archive and upload — so a per-push trigger would be
+# the single largest line item in the account.
+#
+# It therefore runs only on:
+#   * workflow_dispatch  — the normal path. iOS work is batched into focused
+#                          cloud-Mac sessions (brief amendment A19), not spread
+#                          across many short pushes, so an explicit "build now"
+#                          matches how the work actually happens.
+#   * push of an `ios-v*` tag — the release path: tag, build, ship to TestFlight.
+#
+# A `paths:` filter on main was considered and rejected: iOS output depends on
+# agent/osprey-ffi, agent/osprey-core, proto/messages.toml, scripts/ and ios/,
+# which is most of the repo, so the filter would either fire constantly (no
+# saving) or be narrowed until it stopped catching real breakage. ci.yml already
+# guards the parts of that surface a Linux runner can check — including the
+# Apple cross-build and the ring regression guard — so the Mac only has to cover
+# what is genuinely Mac-only.
+#
+# ===========================================================================
+# REQUIRED REPOSITORY SECRETS  (Settings -> Secrets and variables -> Actions)
+#
+# The build/test half needs NONE of these. The signing + TestFlight job is
+# skipped, not failed, when any are missing — see the `signing-secrets` job.
+#
+#   APPLE_TEAM_ID                    10-character Apple Developer Team ID
+#                                    (Membership page in the developer portal).
+#
+#   IOS_DIST_CERT_P12                base64 of an "Apple Distribution" .p12
+#                                    exported from Keychain Access, private key
+#                                    included.   base64 -i cert.p12 | pbcopy
+#   IOS_DIST_CERT_P12_PASSWORD       the password set during that export.
+#
+#   IOS_PROVISIONING_PROFILE         base64 of an App Store distribution
+#                                    .mobileprovision for com.osprey.app.
+#                                    base64 -i Osprey_AppStore.mobileprovision
+#
+#   APP_STORE_CONNECT_KEY_ID         the 10-character Key ID of an App Store
+#                                    Connect API key (Users and Access -> Keys),
+#                                    role App Manager or higher.
+#   APP_STORE_CONNECT_ISSUER_ID      the issuer UUID shown above that key list.
+#   APP_STORE_CONNECT_PRIVATE_KEY    base64 of the AuthKey_<KEY_ID>.p8 file.
+#                                    Apple lets you download it exactly once.
+#
+# The bundle identifier is com.osprey.app (amendment A21) and the profile must
+# match it. Changing the identifier after first pairing invalidates Keychain
+# access groups and forces every paired device to re-pair, so it is not a
+# variable this workflow should ever be asked to override.
+#
+# ===========================================================================
+# XCODE VERSION
+#
+# Since 2026-04-28 App Store Connect rejects builds not made with the iOS 26
+# SDK, i.e. Xcode 26. That applies to the upload job; a plain compile would
+# still work on an older Xcode, but building the archive on one toolchain and
+# everything else on another is a good way to ship a difference nobody tested.
+# So the whole workflow selects one Xcode and prints its version.
+#
+# TODO(frank): confirm which GitHub-hosted runner label actually ships Xcode 26
+# and set it as the default below. This file was authored without network
+# access to the runner-images repository, so `macos-15` is a starting guess, not
+# a verified fact — the `Select Xcode` step fails loudly with the list of what
+# is installed rather than silently building on the wrong toolchain. Both the
+# label and the version are workflow_dispatch inputs so this can be corrected
+# from the UI without editing the file.
+# ===========================================================================
+
+name: iOS
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: macOS runner label
+        required: false
+        default: macos-15
+      xcode_major:
+        description: Xcode major version to select (must be 26 for App Store upload)
+        required: false
+        default: '26'
+      upload:
+        description: Upload to TestFlight when the signing secrets are present
+        type: boolean
+        required: false
+        default: false
+  push:
+    tags:
+      - 'ios-v*'
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Runs on Linux (1x billing) purely to answer "do we have signing material?".
+  #
+  # This exists because the `secrets` context is not available in a job-level
+  # `if:`. Turning the secrets into a plain job output is the supported way to
+  # make a downstream job *skip* rather than fail when they are absent — which
+  # is the requirement: a contributor without secrets must still get a green
+  # build job.
+  signing-secrets:
+    name: check for signing material
+    runs-on: ubuntu-latest
+    outputs:
+      # `ship` folds both questions — are the secrets present, and was shipping
+      # asked for — into one value, so the macOS job repeats a short condition
+      # instead of four copies of a long one.
+      ship: ${{ steps.check.outputs.ship }}
+    steps:
+      - id: check
+        env:
+          UPLOAD_REQUESTED: ${{ inputs.upload }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          P12: ${{ secrets.IOS_DIST_CERT_P12 }}
+          P12_PASSWORD: ${{ secrets.IOS_DIST_CERT_P12_PASSWORD }}
+          PROFILE: ${{ secrets.IOS_PROVISIONING_PROFILE }}
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+
+          # An `ios-v*` tag always means ship; a manual dispatch ships only when
+          # the operator ticked the box, so the ordinary "does it still build"
+          # dispatch never touches App Store Connect.
+          requested=false
+          case "$GITHUB_REF" in
+            refs/tags/ios-v*) requested=true ;;
+          esac
+          # An `if`, not `[ … ] && requested=true`: under `set -e` a trailing
+          # false AND-list is itself a failing command and would end the step.
+          if [ "${UPLOAD_REQUESTED:-}" = 'true' ]; then
+            requested=true
+          fi
+
+          missing=()
+          for name in TEAM_ID P12 P12_PASSWORD PROFILE ASC_KEY_ID ASC_ISSUER_ID ASC_PRIVATE_KEY; do
+            [ -n "${!name:-}" ] || missing+=("$name")
+          done
+
+          if [ "$requested" != true ]; then
+            echo 'ship=false' >> "$GITHUB_OUTPUT"
+            echo '::notice::build only — shipping was not requested for this run'
+          elif [ ${#missing[@]} -eq 0 ]; then
+            echo 'ship=true' >> "$GITHUB_OUTPUT"
+            echo 'all signing secrets present'
+          else
+            echo 'ship=false' >> "$GITHUB_OUTPUT"
+            # Names only. The values are secrets; the names are documentation.
+            echo "::notice::signing skipped, missing secrets: ${missing[*]}"
+          fi
+
+  # --------------------------------------------------------------------------
+  ios:
+    name: build, test, and (optionally) ship
+    needs: signing-secrets
+    runs-on: ${{ inputs.runner || 'macos-15' }}
+
+    env:
+      XCODE_MAJOR: ${{ inputs.xcode_major || '26' }}
+      # TODO(frank): ios/Osprey/project.yml does not exist yet — XcodeGen is the
+      # declared source of truth for the project but the spec has never been
+      # written, so these three names are the ones this workflow *expects* and
+      # the spec must be authored to match (or these updated to match it).
+      XCODEGEN_SPEC: ios/Osprey/project.yml
+      XCODE_PROJECT: ios/Osprey/Osprey.xcodeproj
+      XCODE_SCHEME: Osprey
+      BUNDLE_ID: com.osprey.app
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          app=$(ls -d /Applications/Xcode_"$XCODE_MAJOR"*.app 2>/dev/null | sort -V | tail -1 || true)
+          if [ -z "$app" ]; then
+            echo "::error::Xcode $XCODE_MAJOR is not installed on this runner."
+            echo "App Store Connect has required the iOS 26 SDK since 2026-04-28."
+            echo "Installed Xcodes:"
+            ls -d /Applications/Xcode*.app || echo "  (none)"
+            echo "Pick a runner label that ships it, or re-dispatch with a different xcode_major."
+            exit 1
+          fi
+          sudo xcode-select -s "$app"
+          xcodebuild -version
+          echo "SDKs:"
+          xcodebuild -showsdks | grep -i ios || true
+
+      - name: Install XcodeGen and SwiftLint
+        # Homebrew is preinstalled on GitHub's macOS images. Both tools are
+        # taken unpinned from Homebrew, which is a real reproducibility gap.
+        # TODO(frank): decide whether to pin these (a Brewfile with explicit
+        # versions, or Mint) once the project.yml spec is stable enough that a
+        # XcodeGen behaviour change would be noticeable.
+        run: |
+          set -euo pipefail
+          brew install xcodegen swiftlint
+          xcodegen --version
+          swiftlint version
+
+      - name: Install Rust Apple targets
+        run: |
+          set -euo pipefail
+          # GitHub's macOS images have shipped rustup, but that is an image
+          # detail rather than a promise, and a missing rustup would otherwise
+          # fail three steps later with a confusing message.
+          if ! command -v rustup > /dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          # x86_64 too: build-xcframework.sh warns and omits the slice if the
+          # target is missing, which produces an XCFramework that builds fine
+          # and then fails to run on an Intel Mac's simulator.
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            agent/target
+          key: cargo-ios-${{ runner.os }}-${{ hashFiles('agent/Cargo.lock') }}
+          restore-keys: cargo-ios-${{ runner.os }}-
+
+      - name: Build Osprey.xcframework
+        # On macOS this script runs all five steps: three cargo builds, uniffi
+        # bindings generated from the shipping .a, lipo, and
+        # xcodebuild -create-xcframework.
+        run: scripts/build-xcframework.sh
+
+      - name: Stage the XCFramework and UniFFI bindings for Xcode
+        run: |
+          set -euo pipefail
+          out=agent/target/xcframework
+          mkdir -p ios/Osprey/Frameworks
+          cp -R "$out/Osprey.xcframework" ios/Osprey/Frameworks/
+          # NOT into ios/Osprey/Osprey/Generated/ — that directory belongs to
+          # proto/generate.ts, which deletes any .swift in it that it did not
+          # emit. A uniffi binding placed there would vanish on the next
+          # `pnpm generate` and take the iOS build with it.
+          cp "$out/bindings/osprey_ffi.swift" ios/Osprey/Frameworks/
+          ls -la ios/Osprey/Frameworks
+
+      - name: Generate the Xcode project
+        run: |
+          set -euo pipefail
+          if [ ! -f "$XCODEGEN_SPEC" ]; then
+            echo "::error::$XCODEGEN_SPEC does not exist."
+            echo "XcodeGen is the source of truth for the project (no .xcodeproj is committed),"
+            echo "so the spec has to be written before this workflow can build anything."
+            echo "It must declare: bundle id $BUNDLE_ID, a scheme named $XCODE_SCHEME,"
+            echo "ios/Osprey/Frameworks/Osprey.xcframework as a linked framework, and"
+            echo "ios/Osprey/Frameworks/osprey_ffi.swift as a source file."
+            exit 1
+          fi
+          xcodegen generate --spec "$XCODEGEN_SPEC" --project ios/Osprey
+          ls -la "$XCODE_PROJECT"
+
+      - name: Build for device (unsigned)
+        # CODE_SIGNING_ALLOWED=NO keeps this step working on a fork or a
+        # contributor's run with no certificates: it proves the code compiles
+        # and links against the XCFramework for a real arm64 device, which is
+        # the part the simulator does not prove.
+        run: |
+          set -euo pipefail
+          xcodebuild build \
+            -project "$XCODE_PROJECT" \
+            -scheme "$XCODE_SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            | tee "$RUNNER_TEMP/build-device.log"
+
+      - name: Run unit tests on a simulator
+        # Choosing the simulator by UDID rather than by name: hardcoding
+        # "iPhone 16" breaks silently the week the image adds a new runtime.
+        #
+        # This can only ever cover the pure-Swift layer. Gate P0 criteria 1 and
+        # 2 (QR scan, Secure Enclave identity surviving restart) are NOT
+        # reachable here — the Simulator has neither a camera nor a Secure
+        # Enclave — and are measured on the physical iPhone via TestFlight.
+        run: |
+          set -euo pipefail
+          udid=$(xcrun simctl list devices available --json \
+            | jq -r '[.devices[][] | select(.isAvailable and (.name | startswith("iPhone")))] | .[-1].udid')
+          if [ -z "$udid" ] || [ "$udid" = "null" ]; then
+            echo "::error::no available iPhone simulator on this runner"
+            xcrun simctl list devices available
+            exit 1
+          fi
+          echo "using simulator $udid"
+          xcodebuild test \
+            -project "$XCODE_PROJECT" \
+            -scheme "$XCODE_SCHEME" \
+            -destination "id=$udid" \
+            | tee "$RUNNER_TEMP/test-sim.log"
+
+      - name: SwiftLint
+        # Runs even if the build failed, so one dispatch reports both.
+        #
+        # Gate P0 criterion 7 is "cargo clippy -- -D warnings and swiftlint
+        # clean", and the swiftlint half is currently NOT MEASURED. If this step
+        # is red on its first run that is the unmeasured criterion showing its
+        # true value, not a workflow bug. There is no .swiftlint.yml in the repo
+        # yet, so the default rule set applies.
+        # TODO(frank): add ios/.swiftlint.yml deciding which default rules Osprey
+        # actually adopts, then decide whether --strict (warnings become errors)
+        # is the standard this gate is held to.
+        if: ${{ !cancelled() }}
+        working-directory: ios
+        run: swiftlint lint --reporter github-actions-logging
+
+      # ---------------------------------------------------------------- ship
+      - name: Import the signing certificate
+        if: ${{ success() && needs.signing-secrets.outputs.ship == 'true' }}
+        env:
+          P12_BASE64: ${{ secrets.IOS_DIST_CERT_P12 }}
+          P12_PASSWORD: ${{ secrets.IOS_DIST_CERT_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/osprey-signing.keychain-db"
+          # Ephemeral password for an ephemeral keychain on an ephemeral runner;
+          # it protects nothing that outlives the job, so it is generated rather
+          # than stored as yet another secret to rotate.
+          keychain_password=$(openssl rand -base64 24)
+          echo "KEYCHAIN_PATH=$keychain" >> "$GITHUB_ENV"
+
+          printf '%s' "$P12_BASE64" | base64 --decode > "$RUNNER_TEMP/dist.p12"
+
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/dist.p12" -k "$keychain" -P "$P12_PASSWORD" \
+            -f pkcs12 -T /usr/bin/codesign -T /usr/bin/security
+          # Without this, codesign triggers a GUI keychain-access prompt that
+          # nothing on a headless runner can answer, and the job hangs.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$keychain_password" "$keychain" > /dev/null
+          # Prepend rather than replace: dropping the login keychain from the
+          # search list removes the Apple intermediate certificates.
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+
+          rm -f "$RUNNER_TEMP/dist.p12"
+          security find-identity -v -p codesigning "$keychain"
+
+      - name: Install the provisioning profile
+        if: ${{ success() && needs.signing-secrets.outputs.ship == 'true' }}
+        env:
+          PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE }}
+        run: |
+          set -euo pipefail
+          profile="$RUNNER_TEMP/profile.mobileprovision"
+          printf '%s' "$PROFILE_BASE64" | base64 --decode > "$profile"
+
+          # A .mobileprovision is a CMS-signed plist; this is how you read one.
+          plist="$RUNNER_TEMP/profile.plist"
+          security cms -D -i "$profile" > "$plist"
+          uuid=$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$plist")
+          name=$(/usr/libexec/PlistBuddy -c 'Print :Name' "$plist")
+          echo "PROFILE_NAME=$name" >> "$GITHUB_ENV"
+
+          # Two locations on purpose: Xcode 16 moved the directory it reads
+          # profiles from, and installing into both is cheaper than depending on
+          # which one this runner's Xcode uses.
+          for dir in "$HOME/Library/MobileDevice/Provisioning Profiles" \
+                     "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"; do
+            mkdir -p "$dir"
+            cp "$profile" "$dir/$uuid.mobileprovision"
+          done
+          echo "installed profile '$name' ($uuid)"
+
+      - name: Archive and export the IPA
+        if: ${{ success() && needs.signing-secrets.outputs.ship == 'true' }}
+        env:
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/Osprey.xcarchive"
+          export_dir="$RUNNER_TEMP/export"
+
+          xcodebuild archive \
+            -project "$XCODE_PROJECT" \
+            -scheme "$XCODE_SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$archive" \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME"
+
+          # `app-store-connect` is the method name Xcode 15.3+ uses; older
+          # Xcodes called it `app-store`. This workflow pins Xcode 26, so the
+          # new spelling is the correct one.
+          #
+          # The sed is load-bearing: a YAML block scalar cannot hold lines at
+          # column 0, and an XML declaration preceded by whitespace is not a
+          # well-formed document.
+          sed 's/^[[:space:]]*//' > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>teamID</key><string>$TEAM_ID</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>uploadSymbols</key><true/>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>$BUNDLE_ID</key><string>$PROFILE_NAME</string>
+            </dict>
+          </dict>
+          </plist>
+          PLIST
+
+          xcodebuild -exportArchive \
+            -archivePath "$archive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -exportPath "$export_dir"
+
+          ipa=$(ls "$export_dir"/*.ipa | head -1)
+          echo "IPA_PATH=$ipa" >> "$GITHUB_ENV"
+          ls -la "$export_dir"
+
+      - name: Upload to TestFlight
+        # Internal testers need no App Review, so the physical iPhone can have
+        # the build minutes after this step — which is the only route to the
+        # device at all, because cloud Macs have no USB passthrough (A19).
+        #
+        # altool is Apple's long-standing upload front-end and takes the API key
+        # from ~/.private_keys or ~/.appstoreconnect/private_keys by Key ID.
+        # NOT VERIFIED HERE: this file was written without a Mac, so the exact
+        # altool invocation has never been executed against Xcode 26. If Apple
+        # has retired altool by then, the documented replacements are
+        # `xcrun iTMSTransporter` and giving ExportOptions.plist a
+        # `destination` of `upload` so xcodebuild uploads directly.
+        if: ${{ success() && needs.signing-secrets.outputs.ship == 'true' }}
+        env:
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          key_dir="$HOME/.appstoreconnect/private_keys"
+          mkdir -p "$key_dir"
+          printf '%s' "$ASC_PRIVATE_KEY" | base64 --decode > "$key_dir/AuthKey_$ASC_KEY_ID.p8"
+          chmod 600 "$key_dir/AuthKey_$ASC_KEY_ID.p8"
+
+          xcrun altool --upload-app \
+            --type ios \
+            --file "$IPA_PATH" \
+            --apiKey "$ASC_KEY_ID" \
+            --apiIssuer "$ASC_ISSUER_ID"
+
+          rm -f "$key_dir/AuthKey_$ASC_KEY_ID.p8"
+
+      - name: Report that signing was skipped
+        # Deliberately not a failure. The reason is in the signing-secrets job
+        # log: either shipping was not requested, or a secret is absent.
+        if: ${{ needs.signing-secrets.outputs.ship != 'true' }}
+        run: |
+          echo "::notice::Signing and TestFlight upload skipped — see the 'check for signing material' job for which of the two reasons."
+          echo "The build and test steps above are the full result of this run."
+
+      - name: Stage artifacts
+        # Gathered into one workspace-relative directory first: upload-artifact
+        # roots the archive at the common ancestor of its paths, and mixing
+        # workspace-relative with $RUNNER_TEMP absolute paths buries everything
+        # under a machine-specific prefix.
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          mkdir -p ci-artifacts
+          cp "$RUNNER_TEMP"/*.log ci-artifacts/ 2>/dev/null || true
+          cp agent/target/xcframework/bindings/osprey_ffi.swift ci-artifacts/ 2>/dev/null || true
+          cp "$RUNNER_TEMP"/export/*.ipa ci-artifacts/ 2>/dev/null || true
+          ls -la ci-artifacts
+
+      - name: Collect artifacts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-output
+          if-no-files-found: warn
+          retention-days: 14
+          path: ci-artifacts
+
+      - name: Delete the signing keychain
+        # Runs even on failure: a keychain holding a distribution private key
+        # must not survive the job, whatever else happened.
+        if: ${{ always() && env.KEYCHAIN_PATH != '' }}
+        run: security delete-keychain "$KEYCHAIN_PATH" || true

@@ -7,8 +7,15 @@
 #
 # Regenerate with:  cd ios/Osprey && xcodegen generate
 #
-# Run scripts/build-xcframework.sh BEFORE generating: it produces
-# build/OspreyFFI.xcframework and the generated bindings source referenced below.
+# Run scripts/build-xcframework.sh BEFORE generating. It writes to
+# agent/target/xcframework/; the build then stages Osprey.xcframework and the
+# generated osprey_ffi.swift into ios/Osprey/Frameworks/ (see
+# .github/workflows/ios.yml). Both are generated output and are not committed.
+#
+# The binding is staged into Frameworks/, deliberately NOT into
+# Osprey/Generated/: proto/generate.ts deletes every .swift in that directory it
+# did not itself emit, so a UniFFI binding parked there would silently vanish on
+# the next `pnpm generate` and break the iOS build in a way that looks unrelated.
 
 name: Osprey
 
@@ -33,12 +40,13 @@ targets:
     platform: iOS
     sources:
       - path: Osprey
-      # UniFFI's generated binding. Produced by scripts/build-xcframework.sh into
-      # build/bindings/. It is generated output, so it is not committed; the
-      # build script must run first or generation fails loudly here.
-      - path: ../../build/bindings/osprey_ffi.swift
+      # UniFFI's generated binding, staged here by the build. Compiled into this
+      # target rather than imported as a module — it is what defines the Rust
+      # types FFINoiseEngine uses, and it imports the C shim from the
+      # XCFramework's modulemap itself.
+      - path: Frameworks/osprey_ffi.swift
         optional: true
-        group: Generated
+        group: Frameworks
     info:
       path: Osprey/Info.plist
       properties:
@@ -73,8 +81,10 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: NO
     dependencies:
-      # Static library + C shim modulemap produced by scripts/build-xcframework.sh.
-      - framework: ../../build/OspreyFFI.xcframework
+      # Static library + C shim modulemap produced by scripts/build-xcframework.sh
+      # (as agent/target/xcframework/Osprey.xcframework) and staged here.
+      # Static, so it is linked, not embedded.
+      - framework: Frameworks/Osprey.xcframework
         embed: false
 
   OspreyTests:
