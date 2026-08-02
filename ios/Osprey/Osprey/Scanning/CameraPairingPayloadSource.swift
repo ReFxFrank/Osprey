@@ -16,7 +16,7 @@ public final class CameraPairingPayloadSource: NSObject, PairingPayloadSource,
     /// preview layer is the documented way to render it and does not mutate it.
     public let session = AVCaptureSession()
 
-    private let queue = DispatchQueue(label: "com.osprey.app.scanner")
+    private let queue = DispatchQueue(label: "com.ospreyremote.app.scanner")
     private let lock = NSLock()
     private var continuation: AsyncStream<String>.Continuation?
     private var configured = false

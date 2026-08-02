@@ -49,7 +49,7 @@ public final class TCPByteStream: ByteStream, @unchecked Sendable {
         }
         let connection = NWConnection(
             host: NWEndpoint.Host(host), port: endpointPort, using: parameters)
-        let queue = DispatchQueue(label: "com.osprey.app.tcp")
+        let queue = DispatchQueue(label: "com.ospreyremote.app.tcp")
         let stream = TCPByteStream(connection: connection, queue: queue)
         do {
             try await stream.start(timeout: timeout)

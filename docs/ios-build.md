@@ -135,12 +135,12 @@ rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
 
 ---
 
-## §2 Register the App ID `com.osprey.app`
+## §2 Register the App ID `com.ospreyremote.app`
 
 Do this **now**, and do it before you write a single line of signing config.
 
 > **Bundle identifiers are globally unique across the entire App Store.** If
-> `com.osprey.app` is already taken by someone else, you find out here, in thirty
+> `com.ospreyremote.app` is already taken by someone else, you find out here, in thirty
 > seconds, and pick a variant. If you find out later, the cost is not cosmetic:
 > per amendment A21, changing the bundle id after first pairing **invalidates
 > Keychain access groups and forces every paired device to re-pair**. The
@@ -151,7 +151,7 @@ Do this **now**, and do it before you write a single line of signing config.
 2. **Certificates, Identifiers & Profiles** → **Identifiers** → **+**.
 3. Choose **App IDs** → **App**.
 4. Description: `Osprey`. Bundle ID: select **Explicit** and enter
-   `com.osprey.app`. (Explicit, not wildcard — a wildcard App ID cannot carry
+   `com.ospreyremote.app`. (Explicit, not wildcard — a wildcard App ID cannot carry
    the capabilities Osprey needs from P8 onward.)
 5. **Capabilities: enable nothing for P0.** Push Notifications arrives at P8 and
    can be added to this same App ID later without changing the identifier.
@@ -520,7 +520,7 @@ pairing:
 
 This exercises `DeviceIdentityStore.loadOrCreate` reloading the Secure Enclave
 key blob, the X25519 Noise scalar and the device id from the keychain under
-service `com.osprey.app.identity`, plus `PinStore` reloading the host pin.
+service `com.ospreyremote.app.identity`, plus `PinStore` reloading the host pin.
 **Evidence:** the fingerprint before and after, plus a successful post-restart
 session.
 
@@ -574,7 +574,7 @@ as hand-written code. If this bites, the fix belongs on the Rust/UniFFI side or
 in the generated file's isolation annotations; do **not** relax
 `SWIFT_STRICT_CONCURRENCY` for the whole app to make it go away.
 
-**`No profiles for 'com.osprey.app' were found`** — the App ID is not registered
+**`No profiles for 'com.ospreyremote.app' were found`** — the App ID is not registered
 (§2), or the Apple ID on the Mac is not on the team, or you archived without
 `-allowProvisioningUpdates`.
 

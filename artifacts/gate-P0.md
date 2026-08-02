@@ -157,7 +157,7 @@ original attack rather than by re-reading the diff.
 | # | Item | Status |
 |---|---|---|
 | 1 | Final product name | **RESOLVED — Osprey** (A1) |
-| 4 | Bundle identifier + APNs key id | **Half resolved** — `com.osprey.app` (A21). Still to be registered as an App ID; bundle ids are globally unique, so a collision must be resolved *before first pairing* (renaming afterwards invalidates Keychain access groups and forces every device to re-pair). The APNs `.p8` half is genuinely P8. |
+| 4 | Bundle identifier + APNs key id | **Half resolved** — `com.ospreyremote.app` (A21). Still to be registered as an App ID; bundle ids are globally unique, so a collision must be resolved *before first pairing* (renaming afterwards invalidates Keychain access groups and forces every device to re-pair). The APNs `.p8` half is genuinely P8. |
 | 5 | Relay domain + VPS | Open; not needed until P5. |
 | 11 | One host or a device list | Open and **not blocking** — `devices.kind` plus the `pairings` join supports N agents per account without prejudging the UI. |
 | 6, 8, 9, 10, 12, 13 | Sensors driver, signing cert, indicator style, denylist, review doc, desktop client | Open, all later phases. |
@@ -167,7 +167,7 @@ original attack rather than by re-reading the diff.
 **No — finish P0 first.** The remaining work is bounded, and all of it needs the
 cloud Mac. Follow `docs/ios-build.md`.
 
-1. Register App ID `com.osprey.app` (resolve a collision now if there is one).
+1. Register App ID `com.ospreyremote.app` (resolve a collision now if there is one).
 2. `cd ios/Osprey && xcodegen generate`.
 3. `scripts/build-xcframework.sh` — note the Rust static libraries **and** the
    UniFFI Swift bindings already build on Linux, so only lipo,
@@ -182,6 +182,6 @@ cloud Mac. Follow `docs/ios-build.md`.
 6. Measure criteria 1, 2 (app half) and 7 (swiftlint) **on the device**. The
    Simulator cannot substitute: it has neither a camera nor a Secure Enclave.
 
-**The one thing to decide first:** whether `com.osprey.app` is available, because
+**The one thing to decide first:** whether `com.ospreyremote.app` is available, because
 every signing artifact downstream depends on it and changing it later forces
 re-pairing.

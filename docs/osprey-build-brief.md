@@ -744,7 +744,7 @@ Brief line 735 requires amendments be recorded here rather than silently diverge
 **The product is `Osprey`.** Approved by the owner, 2026-08-02. Throughout this document, "TETHER" should be read as "Osprey". Concretely: crates are `osprey-core`, `osprey-proto`, `osprey-svc`, `osprey-helper`, `osprey-secure`; the Windows data directory is `%ProgramData%\Osprey\`; the iOS app is "Osprey".
 
 ### A2 — Bundle identifier (closes the P0-blocking half of `TODO(frank)` #4)
-Owner delegated naming authority, then narrowed it: the identifier carries no personal or brand prefix. Bundle identifier is **`com.osprey.app`**. This must be registered as an App ID in the Apple Developer portal before a provisioning profile can be issued. The APNs `.p8` key ID half of TODO #4 remains **open** and is genuinely P8, not P0.
+Owner delegated naming authority, then narrowed it: the identifier carries no personal or brand prefix. Bundle identifier is **`com.ospreyremote.app`**. This must be registered as an App ID in the Apple Developer portal before a provisioning profile can be issued. The APNs `.p8` key ID half of TODO #4 remains **open** and is genuinely P8, not P0.
 
 Note carried forward: renaming the bundle ID later invalidates Keychain access groups and therefore forces re-pairing of every device. It is cheap now and expensive after first pairing.
 
@@ -843,7 +843,17 @@ here because getting them wrong fails silently rather than loudly:
 
 ### A21 — Bundle identifier carries no personal or brand prefix
 Superseding the identifier recorded in A2: the bundle identifier is
-**`com.osprey.app`**. Bundle identifiers are globally unique across the App
-Store, so if this one is unavailable a variant must be chosen **before first
-pairing** — changing it afterwards invalidates Keychain access groups and forces
-every paired device to re-pair.
+**`com.ospreyremote.app`**, registered 2026-08-02 under Team ID `FM8Z8BA64H`.
+
+`com.osprey.app` was tried first and rejected by the portal as unavailable.
+"Osprey" is a common trade name (Osprey Packs, Osprey Publishing), and an
+existing **wildcard App ID of the form `com.osprey.*` blocks every explicit
+identifier beneath it** — so no `com.osprey.<anything>` variant would have
+worked. The fix was to leave that prefix entirely rather than iterate on the
+final component.
+
+This is exactly why the identifier is registered before any signing
+configuration exists. Bundle identifiers are globally unique across the App
+Store, and changing one after first pairing invalidates Keychain access groups —
+the identity key, the Noise static, and the host pin all live in the keychain
+under that identity — which would force every paired device to re-pair.

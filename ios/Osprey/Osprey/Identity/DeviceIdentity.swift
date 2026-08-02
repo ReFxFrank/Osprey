@@ -54,7 +54,7 @@ public struct DeviceIdentity: Sendable {
 
 /// Creation, loading and destruction of the device identity.
 public enum DeviceIdentityStore {
-    public static let keychainService = "com.osprey.app.identity"
+    public static let keychainService = "com.ospreyremote.app.identity"
 
     static let secureEnclaveAccount = "identity-p256-secure-enclave"
     static let noiseStaticAccount = "noise-static-x25519"

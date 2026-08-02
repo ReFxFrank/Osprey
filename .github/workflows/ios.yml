@@ -39,7 +39,7 @@
 #   IOS_DIST_CERT_P12_PASSWORD       the password set during that export.
 #
 #   IOS_PROVISIONING_PROFILE         base64 of an App Store distribution
-#                                    .mobileprovision for com.osprey.app.
+#                                    .mobileprovision for com.ospreyremote.app.
 #                                    base64 -i Osprey_AppStore.mobileprovision
 #
 #   APP_STORE_CONNECT_KEY_ID         the 10-character Key ID of an App Store
@@ -49,7 +49,7 @@
 #   APP_STORE_CONNECT_PRIVATE_KEY    base64 of the AuthKey_<KEY_ID>.p8 file.
 #                                    Apple lets you download it exactly once.
 #
-# The bundle identifier is com.osprey.app (amendment A21) and the profile must
+# The bundle identifier is com.ospreyremote.app (amendment A21) and the profile must
 # match it. Changing the identifier after first pairing invalidates Keychain
 # access groups and forces every paired device to re-pair, so it is not a
 # variable this workflow should ever be asked to override.
@@ -177,7 +177,7 @@ jobs:
       XCODEGEN_SPEC: ios/Osprey/project.yml
       XCODE_PROJECT: ios/Osprey/Osprey.xcodeproj
       XCODE_SCHEME: Osprey
-      BUNDLE_ID: com.osprey.app
+      BUNDLE_ID: com.ospreyremote.app
 
     steps:
       - uses: actions/checkout@v4
