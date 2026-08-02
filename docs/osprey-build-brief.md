@@ -816,3 +816,34 @@ One constraint follows from the cloud Mac and must shape the iOS workflow: cloud
 This is not merely a convenience issue. Gate P0 requires the phone to scan a QR code and use a Secure-Enclave-backed key, and **neither the camera nor the Secure Enclave exists in the iOS Simulator** — Apple DTS states the Simulator "acts like an iOS device that has no SE." So every P0 iOS gate step must run on the physical device, reached via TestFlight.
 
 Sequencing consequence: iOS work is batched rather than iterative. The Rust XCFramework build (UniFFI-wrapped `snow`), the Xcode project, and the pairing UI should be assembled and then exercised in a focused cloud-Mac session, rather than spread across many short sessions with a slow build-to-device loop.
+
+### A20 — Peer identity verification must be algorithm-agnostic (P-256, not only Ed25519)
+Amendment A4 established that the agent's identity is Ed25519 and the phone's is
+P-256 in the Secure Enclave, each cross-signing its own X25519 Noise static. The
+first implementation verified **Ed25519 only**, which meant the agent could not
+verify a Secure-Enclave-signed static at all — pairing with a real iPhone would
+have failed on the device, at the least convenient possible moment.
+
+**Amendment.** Peer verification dispatches on the `identity_algorithm` field
+already present in `proto/messages.toml` (`ed25519` | `p256`). Each device's own
+identity key is unchanged: the agent still signs with Ed25519 (§6.1), the phone
+with Secure Enclave P-256. An unrecognised algorithm is a typed rejection, never
+a silent accept or a default to the weaker option.
+
+The wire encodings are fixed by what Apple's APIs actually emit, and are recorded
+here because getting them wrong fails silently rather than loudly:
+
+- A Secure Enclave P-256 public key exports via `SecKeyCopyExternalRepresentation`
+  as an **X9.63 uncompressed point**: `0x04 || X(32) || Y(32)`, 65 bytes.
+- `SecKeyCreateSignature` with `.ecdsaSignatureMessageX962SHA256` hashes the
+  message with SHA-256 itself and returns an **ASN.1 DER** ECDSA signature of
+  variable length — not the fixed-width `r || s` form.
+- The signed byte string is identical across both algorithms:
+  `"osprey/noise-static/v1" || device_id[16] || noise_static_public_key[32]`.
+
+### A21 — Bundle identifier carries no personal or brand prefix
+Superseding the identifier recorded in A2: the bundle identifier is
+**`com.osprey.app`**. Bundle identifiers are globally unique across the App
+Store, so if this one is unavailable a variant must be chosen **before first
+pairing** — changing it afterwards invalidates Keychain access groups and forces
+every paired device to re-pair.
