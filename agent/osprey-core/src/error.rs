@@ -72,6 +72,13 @@ pub enum Error {
     #[error("transport message failed authentication")]
     TransportAuth(#[source] snow::Error),
 
+    /// The caller assembled an impossible handshake (pairing without a PSK, an
+    /// initiator without the peer's static). A local programming error, but
+    /// returned rather than asserted because getting it wrong would silently
+    /// weaken authentication.
+    #[error("handshake configuration is invalid: {0}")]
+    HandshakeConfig(&'static str),
+
     #[error("frame is {len} bytes, exceeds the {max}-byte Noise message limit")]
     FrameTooLarge { len: usize, max: usize },
 

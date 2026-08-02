@@ -1,0 +1,13 @@
+[package]
+name = "osprey-proto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Osprey wire protocol types, generated from proto/messages.toml."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+base64 = "0.22"
+uuid = { version = "1", features = ["serde", "v4"] }

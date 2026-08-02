@@ -1,0 +1,360 @@
+# Osprey protocol — THE single source of truth.
+#
+# Rust (`agent/osprey-proto/src/generated/`) and Swift
+# (`ios/Osprey/Osprey/Generated/`) types are generated from this file by
+# `proto/generate.ts`. Never hand-edit a generated file and never maintain a
+# parallel enum: run `pnpm generate` after any change here.
+#
+# Scope rule for P0 (brief §5.2, execution plan §2 #6): a message is either
+# FULLY defined (a `[[messages]]` block with a body schema) or NAME-ONLY
+# (listed in its group's `deferred` array). Name-only entries reserve the wire
+# string and the enum variant so the registry is complete, without inventing a
+# body schema for a subsystem that has not been designed yet. Inventing those
+# schemas now would guarantee churn; reserving the names now is what makes the
+# P10 "zero new protocol messages" gate achievable.
+
+[meta]
+# Highest envelope version this generation of the protocol speaks.
+protocol_version = 1
+# Lowest envelope version a peer may offer and still be understood.
+min_protocol_version = 1
+rust_out = "../agent/osprey-proto/src/generated"
+swift_out = "../ios/Osprey/Osprey/Generated"
+
+# ---------------------------------------------------------------------------
+# Envelope (brief §5.1)
+# ---------------------------------------------------------------------------
+# One bidirectional message stream, framed, over whichever transport won the
+# §3.1 connection ladder. `t` selects the body schema; decoding is therefore a
+# two-step operation (header, then body) in both languages. That is deliberate:
+# neither serde's `flatten` + adjacent tagging nor Swift `Codable` can express a
+# single-pass tagged envelope without fragile machinery, and a malformed body
+# must produce a typed error naming the message type it failed on.
+[envelope]
+doc = "Wire envelope common to every Osprey message."
+fields = [
+  { name = "v", type = "u32", doc = "Envelope version. Peers reject a version outside [min_protocol_version, protocol_version]." },
+  { name = "id", type = "uuid", doc = "Correlation id. A response carries the id of the request it answers." },
+  { name = "t", type = "MessageType", doc = "Message type; selects the body schema." },
+  { name = "ts", type = "i64", doc = "Sender clock, milliseconds since the Unix epoch. Advisory only — never used for authentication or expiry." },
+  { name = "body", type = "json", doc = "Type-specific payload. Decoded in a second step so an unparseable body reports which type it belonged to." },
+]
+
+# ---------------------------------------------------------------------------
+# Groups
+# ---------------------------------------------------------------------------
+# Every group with `capability = true` (the default) is one entry in the
+# `Capability` enum. Capability == "I implement this message group" is the whole
+# rule; there is no hand-maintained capability list to drift from the registry.
+#
+# `deferred` reserves wire names whose bodies are not yet designed.
+# `unreliable` marks the messages that MUST travel on the unordered,
+# unreliable data channel (brief §5.3). Encoding that here rather than in a
+# comment is what lets the generator emit `MessageType::channel()`, so the
+# two-channel invariant is machine-checked instead of remembered.
+
+[[groups]]
+name = "core"
+capability = false
+doc = "Transport-independent messages that are not part of any feature area."
+
+[[groups]]
+name = "session"
+capability = false
+doc = "Connection lifecycle. Always implemented; not negotiable and therefore not a capability."
+
+[[groups]]
+name = "pair"
+capability = false
+doc = """
+Enrollment. Carried inside the PSK-authenticated Noise channel established \
+during QR pairing (execution plan §2 #1/#2), never over a relay HTTP route — \
+the relay is untrusted and must not be able to substitute a key."""
+
+[[groups]]
+name = "metrics"
+doc = "CPU/RAM/disk/network/GPU telemetry (M-01, M-02, M-03)."
+deferred = ["metrics.subscribe", "metrics.tick", "metrics.history"]
+
+[[groups]]
+name = "process"
+doc = "Process enumeration and control (M-04, M-05)."
+deferred = ["proc.list", "proc.kill", "proc.start", "proc.priority"]
+
+[[groups]]
+name = "service"
+doc = "Windows service enumeration and control (M-06)."
+deferred = ["svc.list", "svc.start", "svc.stop", "svc.restart", "svc.startup_type"]
+
+[[groups]]
+name = "power"
+doc = "Power state transitions and Wake-on-LAN (M-07, M-08)."
+deferred = ["power.reboot", "power.shutdown", "power.sleep", "power.lock", "power.logoff", "power.wol"]
+
+[[groups]]
+name = "exec"
+doc = "One-shot command execution (M-12). Opt-in per agent, off by default."
+deferred = ["exec.run", "exec.result"]
+
+[[groups]]
+name = "terminal"
+doc = "Interactive ConPTY terminal (M-11)."
+deferred = ["term.open", "term.data", "term.resize", "term.close"]
+
+[[groups]]
+name = "files"
+doc = "File browsing and chunked transfer (M-09, M-10)."
+deferred = [
+  "fs.list", "fs.stat", "fs.mkdir", "fs.delete", "fs.rename",
+  "fs.read.begin", "fs.chunk", "fs.write.begin", "fs.transfer.status",
+]
+
+[[groups]]
+name = "events"
+doc = "Windows Event Log query and live tail (M-13)."
+deferred = ["evt.query", "evt.tail"]
+
+[[groups]]
+name = "apps"
+doc = "Installed application inventory and uninstall (M-14)."
+deferred = ["app.list", "app.uninstall"]
+
+[[groups]]
+name = "tasks"
+doc = "Scheduled task enumeration and control (M-15)."
+deferred = ["task.list", "task.run", "task.enable"]
+
+[[groups]]
+name = "network"
+doc = "Interface, connection and throughput reporting (M-16)."
+deferred = ["net.interfaces", "net.connections", "net.speedtest"]
+
+[[groups]]
+name = "alerts"
+doc = "Threshold rules, firing and acknowledgement (M-17)."
+deferred = ["alert.rules.get", "alert.rules.set", "alert.fired", "alert.ack"]
+
+[[groups]]
+name = "session_plane"
+doc = "Screen capture, encode and monitor selection (S-*)."
+deferred = ["stream.start", "stream.stop", "stream.quality", "stream.monitors", "stream.select_monitor"]
+
+[[groups]]
+name = "input"
+doc = "Remote input injection (S-*). Split across two data channels — see `unreliable`."
+deferred = ["input.mouse", "input.key", "input.scroll", "input.text", "input.sas"]
+# Brief §5.3: mouse-move is the highest-frequency message in the system and
+# head-of-line blocking on a reliable channel is the most common cause of a
+# remote desktop feeling laggy. A dropped mouse-move is invisible; a dropped
+# keystroke is not. These two, and only these two, go unreliable + unordered.
+unreliable = ["input.mouse", "input.scroll"]
+
+[[groups]]
+name = "clipboard"
+doc = "Clipboard synchronisation (S-*)."
+deferred = ["clip.push", "clip.pull", "clip.changed"]
+
+[[groups]]
+name = "audio"
+doc = "Host audio capture and playback (S-*)."
+deferred = ["audio.start", "audio.stop"]
+
+[[groups]]
+name = "privacy"
+doc = "Host-side privacy controls: blank screen, block local input (S-*)."
+deferred = ["privacy.blank", "privacy.block_local_input"]
+
+# ---------------------------------------------------------------------------
+# Enumerations
+# ---------------------------------------------------------------------------
+# Every enum here is OPEN: an unrecognised wire string decodes to the
+# `unknown` case carrying the original string rather than failing the whole
+# message. A peer running an older build must be able to read a newer peer's
+# message and ignore what it does not understand — that is the property the
+# P10 gate depends on. Note this is the opposite of `MessageType`, which is
+# CLOSED: an unroutable message type is a hard error, not something to ignore.
+
+[[enums]]
+name = "ErrorCode"
+doc = "Machine-readable failure class. Pair with `retryable` to decide whether to back off or give up."
+values = [
+  { name = "bad_request", doc = "Envelope or body failed schema validation." },
+  { name = "unsupported", doc = "Well-formed message the peer does not implement — capability not negotiated." },
+  { name = "unauthorized", doc = "Peer is not paired, or the pairing was revoked." },
+  { name = "not_found", doc = "Referenced resource does not exist. Never distinguishes 'absent' from 'not yours'." },
+  { name = "conflict", doc = "Request contradicts current state, e.g. redeeming an already-redeemed pairing." },
+  { name = "rate_limited", doc = "Caller exceeded a quota. Retryable after a delay." },
+  { name = "timeout", doc = "The peer gave up waiting on something downstream." },
+  { name = "version_mismatch", doc = "No envelope version in common — see hello / hello.ok." },
+  { name = "internal", doc = "Unexpected host-side failure. Details stay in the host audit log, not on the wire." },
+]
+
+[[enums]]
+name = "ByeReason"
+doc = "Why a session is ending. Recorded in the host audit log (brief §6.4)."
+values = [
+  { name = "normal", doc = "Orderly shutdown by either peer." },
+  { name = "unpaired", doc = "Pairing was revoked; the session is being dropped immediately (brief §6.1)." },
+  { name = "host_shutdown", doc = "Host machine is powering off or the service is stopping." },
+  { name = "idle_timeout", doc = "No traffic within the keepalive window." },
+  { name = "protocol_error", doc = "Peer sent something unparseable or out of sequence." },
+]
+
+[[enums]]
+name = "IdentityAlgorithm"
+doc = """
+Signature algorithm of a peer's hardware-backed identity key. The agent is \
+Ed25519 in DPAPI; iOS is P-256 in the Secure Enclave, because Ed25519 is not \
+Secure-Enclave-backed (brief §6.1). Carrying the algorithm explicitly means a \
+verifier never has to infer it from key length."""
+values = [
+  { name = "ed25519", doc = "Ed25519, 32-byte public key. Windows agent and the P10 desktop client." },
+  { name = "p256", doc = "NIST P-256 ECDSA, 65-byte SEC1 uncompressed public key. iOS Secure Enclave." },
+]
+
+# ---------------------------------------------------------------------------
+# Fully defined messages
+# ---------------------------------------------------------------------------
+
+[[messages]]
+type = "error"
+group = "core"
+rust_name = "ErrorBody"
+swift_name = "ErrorBody"
+doc = """
+Universal failure response. Brief §5.1 promises every request maps to exactly \
+one response type or an `error`, but the §5.2 registry omitted the type — it \
+is defined here (execution plan §2 #6). Carries the correlation id of the \
+request it rejects."""
+fields = [
+  { name = "code", type = "ErrorCode", doc = "Failure class." },
+  { name = "message", type = "string", doc = "Human-readable detail. Safe to display; never contains host paths or secrets." },
+  { name = "retryable", type = "bool", doc = "True if an identical retry could succeed later. False means the caller must change something." },
+]
+
+[[messages]]
+type = "hello"
+group = "session"
+rust_name = "HelloBody"
+swift_name = "HelloBody"
+doc = """
+First message on an established Noise channel, sent by the initiator (the \
+client — see execution plan §2 #13). Version and capability negotiation exist \
+from day one because Gate P10 fails the design if a later phase needs a new \
+protocol message; a capability set means later phases add capabilities, not \
+messages."""
+fields = [
+  { name = "protocol_version", type = "u32", doc = "Highest envelope version the sender speaks." },
+  { name = "min_protocol_version", type = "u32", doc = "Lowest envelope version the sender accepts." },
+  { name = "capabilities", type = "[Capability]", doc = "Message groups the sender implements. Unknown entries must be ignored, not rejected." },
+  { name = "device_id", type = "uuid", doc = "Sender's device id, as pinned at pairing." },
+  { name = "software_version", type = "string", doc = "Sender build version, for diagnostics and the audit log. Never used to gate behaviour — capabilities do that." },
+]
+
+[[messages]]
+type = "hello.ok"
+group = "session"
+rust_name = "HelloOkBody"
+swift_name = "HelloOkBody"
+doc = """
+Responder's answer to `hello`. If no envelope version is common to both peers \
+the responder sends `error` with `version_mismatch` instead of this."""
+fields = [
+  { name = "protocol_version", type = "u32", doc = "Envelope version selected for this session. Both peers use exactly this from here on." },
+  { name = "capabilities", type = "[Capability]", doc = "Responder's implemented groups. The effective set for the session is the intersection with the initiator's." },
+  { name = "device_id", type = "uuid", doc = "Responder's device id, as pinned at pairing." },
+  { name = "software_version", type = "string", doc = "Responder build version." },
+  { name = "session_id", type = "uuid", doc = "Identifies this session in the host audit log, which records start/stop with duration and peer device id (brief §6.4)." },
+]
+
+[[messages]]
+type = "ping"
+group = "session"
+rust_name = "PingBody"
+swift_name = "PingBody"
+doc = "Liveness probe and round-trip measurement. Either peer may send it."
+fields = [
+  { name = "seq", type = "u64", doc = "Monotonic per-session counter, so a late `pong` is attributable rather than merely stale." },
+]
+
+[[messages]]
+type = "pong"
+group = "session"
+rust_name = "PongBody"
+swift_name = "PongBody"
+doc = "Answer to `ping`, carrying the same envelope correlation id."
+fields = [
+  { name = "seq", type = "u64", doc = "Echo of the ping's `seq`." },
+  { name = "echo_ts", type = "i64", doc = "Echo of the ping envelope's `ts`, so the sender computes round-trip time without holding per-ping state." },
+]
+
+[[messages]]
+type = "bye"
+group = "session"
+rust_name = "ByeBody"
+swift_name = "ByeBody"
+doc = "Orderly session teardown. Best-effort: a peer must handle a dropped transport identically."
+fields = [
+  { name = "reason", type = "ByeReason", doc = "Why the session is ending." },
+  { name = "detail", type = "string", optional = true, doc = "Optional human-readable elaboration for the audit log." },
+]
+
+[[messages]]
+type = "pair.request"
+group = "pair"
+rust_name = "PairRequestBody"
+swift_name = "PairRequestBody"
+doc = """
+Client → agent, first message inside the `Noise_IKpsk2` channel whose PSK is \
+the `pairing_secret` from the physically scanned QR. Only the physical scanner \
+holds that secret, so reaching this point already proves physical access; this \
+body carries the material the agent pins."""
+fields = [
+  { name = "device_id", type = "uuid", doc = "Client device id, chosen by the client and pinned by the agent." },
+  { name = "identity_algorithm", type = "IdentityAlgorithm", doc = "Algorithm of `identity_public_key`." },
+  { name = "identity_public_key", type = "bytes", doc = "Hardware-backed identity public key. The durable root of trust; the agent pins this permanently." },
+  { name = "noise_static_public_key", type = "bytes", doc = "X25519 Noise static public key, 32 bytes. Rotatable by re-signing; the identity key above is what makes a rotation trustworthy." },
+  { name = "noise_static_signature", type = "bytes", doc = "Cross-signature binding the Noise static to the identity key: Sign_identity(\"osprey/noise-static/v1\" || device_id[16] || noise_static_public_key[32]). The receiver MUST reject the pairing if this does not verify." },
+  { name = "display_name", type = "string", doc = "Peer-supplied label shown beside the key fingerprint during host confirmation. Attacker-controlled text — display it, never trust it, never use it as an identifier." },
+]
+
+[[messages]]
+type = "pair.confirm"
+group = "pair"
+rust_name = "PairConfirmBody"
+swift_name = "PairConfirmBody"
+doc = """
+Agent → client, answering `pair.request`. The mirror image: the agent's own \
+pinnable material. The client already holds the agent identity key from the \
+QR, so it MUST compare `identity_public_key` against the scanned value and \
+abort on mismatch — that comparison is what a hostile relay cannot defeat."""
+fields = [
+  { name = "device_id", type = "uuid", doc = "Agent device id." },
+  { name = "account_id", type = "uuid", doc = "Relay account this agent belongs to. Every relay row is scoped to it (brief §6.7)." },
+  { name = "identity_algorithm", type = "IdentityAlgorithm", doc = "Algorithm of `identity_public_key`. Ed25519 for a Windows agent." },
+  { name = "identity_public_key", type = "bytes", doc = "Agent's hardware-backed identity public key. Must byte-equal the key carried in the scanned QR." },
+  { name = "noise_static_public_key", type = "bytes", doc = "Agent's X25519 Noise static public key, 32 bytes. Pinned for all post-pairing sessions, which run plain Noise_IK with no PSK." },
+  { name = "noise_static_signature", type = "bytes", doc = "Cross-signature over the Noise static, same construction as in pair.request. Reject the pairing if it does not verify under `identity_public_key`." },
+  { name = "display_name", type = "string", doc = "Host machine name, shown in the client's device list." },
+  { name = "paired_at", type = "i64", doc = "Agent clock at pin time, milliseconds since the Unix epoch. Audit metadata only." },
+]
+
+[[messages]]
+type = "pair.revoke"
+group = "pair"
+rust_name = "PairRevokeBody"
+swift_name = "PairRevokeBody"
+doc = """
+Signed unpair, sent over the authenticated Noise channel (execution plan §3, \
+task D3). The agent's local pin store is authoritative — the relay is untrusted \
+and is not even on the path for a LAN session — so this message is what lets \
+the *client* drop a pairing the operator is not standing next to. The relay may \
+carry it best-effort but can neither forge nor suppress it. Every revocation is \
+audited."""
+fields = [
+  { name = "issuer_device_id", type = "uuid", doc = "Device that signed this revocation." },
+  { name = "revoked_device_id", type = "uuid", doc = "Device whose pin is being removed. Either peer may revoke either side of the pairing." },
+  { name = "issued_at", type = "i64", doc = "Signing time, milliseconds since the Unix epoch. Covered by the signature. Receivers reject revocations far outside their own clock window." },
+  { name = "nonce", type = "bytes", doc = "32 random bytes. Covered by the signature; the receiver rejects a nonce it has already accepted, so a captured revocation cannot be replayed after re-pairing." },
+  { name = "signature", type = "bytes", doc = "Sign_identity(\"osprey/pair.revoke/v1\" || issuer_device_id[16] || revoked_device_id[16] || issued_at as big-endian i64[8] || nonce[32]), by the issuer's pinned identity key." },
+]

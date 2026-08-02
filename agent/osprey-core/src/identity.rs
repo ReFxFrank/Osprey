@@ -197,7 +197,7 @@ impl DeviceIdentity {
     pub fn generate() -> Self {
         let mut rng = rand_core::OsRng;
         let identity = SigningKey::generate(&mut rng);
-        let noise_static = StaticSecret::random_from_rng(&mut rng);
+        let noise_static = StaticSecret::random_from_rng(rng);
         Self::assemble(identity, noise_static)
     }
 
@@ -242,9 +242,11 @@ impl DeviceIdentity {
     /// Peers keep their pin on the identity key and re-accept the new static via
     /// [`PinnedPeer::accept_static`], so rotation does not require re-pairing.
     pub fn rotate_noise_static(&mut self) {
-        let mut rng = rand_core::OsRng;
         let identity = self.identity.clone();
-        *self = Self::assemble(identity, StaticSecret::random_from_rng(&mut rng));
+        *self = Self::assemble(
+            identity,
+            StaticSecret::random_from_rng(rand_core::OsRng),
+        );
     }
 
     /// Seal the private key material into the keystore under [`IDENTITY_LABEL`].
