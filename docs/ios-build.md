@@ -78,8 +78,13 @@ Gate P0 criterion 7 requires `swiftlint` clean, which is meaningless without a
 defined rule set. `.swiftlint.yml` now exists at the repo root, so "clean" has a
 fixed meaning and cannot be quietly redefined by adding a config later.
 
-It runs SwiftLint's default rules over `ios/` only, with two exclusions that are
-deliberate rather than convenient: `ios/Osprey/Osprey/Generated/` (emitted by
+It runs SwiftLint over `ios/` only. It is not the default rule set: it caps
+`file_length` at CLAUDE.md's 600 lines, tightens `line_length`, raises
+`force_try`/`force_cast` to errors as the Swift counterpart of the no-`unwrap`
+rule, adds eight opt-in rules, and — load-bearing — narrows the `todo` rule to
+FIXME only, without which CLAUDE.md rule 10's mandated `TODO(frank):` markers
+would make `--strict` unsatisfiable. Two exclusions are deliberate rather than
+convenient: `ios/Osprey/Osprey/Generated/` (emitted by
 `proto/generate.ts` — lint findings there are bugs in the *generator*, to be
 fixed in `proto/lib/emit-swift.ts`, and hand-editing generated files is forbidden
 by CLAUDE.md) and `ios/Osprey/Frameworks/` (UniFFI output, not our source).
@@ -422,7 +427,9 @@ hour.
 
 Prerequisites:
 
-1. **Register the phone's UDID** in the portal (§2). To read the UDID from
+1. **Register the phone's UDID** in the portal — ✅ already done 2026-08-02
+   (§2); these steps are here only if you ever add a second device. To read a
+   UDID from
    Windows: install the **Apple Devices** app (or iTunes), connect the iPhone,
    open the device page, and click the serial number field until it cycles to
    the UDID; copy it.
@@ -545,12 +552,17 @@ clippy already passes on both the host and `x86_64-pc-windows-msvc`. On the Mac:
 
 ```bash
 cd /path/to/Osprey
-swiftlint --strict          # non-zero exit on warnings as well as errors
+swiftlint lint --config .swiftlint.yml --strict   # warnings fail too
 ```
 
-Record the exit code and the violation count. See §0.3 — there is no
-`.swiftlint.yml`, so this measures against swiftlint's defaults, and the report
-should say so rather than implying a curated rule set.
+Run it from the repository root. SwiftLint resolves an implicit config by walking
+up from the files it lints, so a run started inside `ios/` silently falls back to
+the default rules — under which the generated protocol types are not excluded and
+several generated lines breach the default 200-column error.
+
+Record the exit code and the violation count. The rule set is `.swiftlint.yml`
+(§0.3), which is deliberately not the defaults, so the gate result means
+something specific and repeatable.
 
 ### Everything else
 
@@ -569,9 +581,11 @@ target. It is `optional: true` in `project.yml`, so a wrong path fails silently.
 See §0.1; confirm with
 `grep -c osprey_ffi.swift ios/Osprey/Osprey.xcodeproj/project.pbxproj`.
 
-**`framework not found OspreyFFI`** — same root cause, the XCFramework half.
-Check the name too: the script writes `Osprey.xcframework`, the spec asks for
-`OspreyFFI.xcframework`.
+**`framework not found Osprey`** — same root cause, the XCFramework half: the
+staging copy into `ios/Osprey/Frameworks/` did not run, so `project.yml`'s
+`Frameworks/Osprey.xcframework` reference resolves to nothing. Re-run
+`scripts/build-xcframework.sh` and the staging step, then `xcodegen generate`
+again.
 
 **`building for iOS Simulator, but linking in object file built for iOS`** — the
 XCFramework is missing its simulator slice, or the device and simulator slices

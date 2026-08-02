@@ -187,7 +187,7 @@ configured for `trust` on that port. Override with:
 ```bash
 cd agent
 cargo build --workspace
-cargo test --workspace                                   # 142 tests
+cargo test --workspace                                   # 146 tests
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 

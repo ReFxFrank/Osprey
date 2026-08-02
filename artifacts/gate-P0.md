@@ -24,7 +24,7 @@ environment and observed.
 
 | # | Criterion (verbatim from brief) | Result | Evidence |
 |---|---|---|---|
-| 1 | Phone scans QR, pairs, exchanges an authenticated encrypted `ping`/`pong` over the local network. | **NOT MEASURED** | iOS client source exists (47 Swift files) but has never been compiled — no Apple SDK here. The protocol equivalent is proven agent-side: `pair_then_session_then_unpair_blocks_the_next_connection` runs a full IKpsk2 pairing, a steady-state IK session, encrypted ping/pong and unpair over real TCP on loopback. That is not the criterion, which requires the phone. |
+| 1 | Phone scans QR, pairs, exchanges an authenticated encrypted `ping`/`pong` over the local network. | **NOT MEASURED** | Still requires the phone, so it stays unmeasured — but substantially de-risked since this report was first written. The iOS Swift sources were linked against the real Rust library on Linux and the XCTest suite run against a live `osprey-core` responder: 46 tests, 0 failures, driving genuine IKpsk2 handshakes through the same UniFFI surface the phone will use. Agent-side, `pair_then_session_then_unpair_blocks_the_next_connection` covers pairing, session, ping/pong and unpair over real TCP. What remains unproven is the Apple-SDK half — Secure Enclave, camera, Keychain — and the app has never been compiled by Xcode. |
 | 2 | Keys survive agent restart and app restart. | **PARTIAL** | Agent half PASS — `dev_keystore_survives_a_save_load_cycle` reopens the keystore as a restart proxy and asserts the reloaded bundle is byte-identical and still verifies. App half NOT MEASURED: Keychain/Secure Enclave persistence needs the device. |
 | 3 | Unpair works from both sides and immediately blocks traffic. | **PASS** | Both directions. Agent side: `osprey-svc unpair`. Peer side: `pair.revoke` verified against the pinned identity with a freshness window, single-use nonce, and issuer/target binding; wrong-identity, replayed-nonce and stale-timestamp cases all rejected. Enforcement is local and authoritative — the relay is never the enforcement point. |
 | 4 | Tampering with a handshake byte causes a clean logged failure, not a panic. | **PASS** | Byte-flip tests across handshake offsets return typed errors and write an audit entry. `#![deny(clippy::unwrap_used, clippy::expect_used)]` is active on the crypto crates and was proven to fire by inserting a deliberate `unwrap()`. |
@@ -37,19 +37,23 @@ environment and observed.
 
 | Metric | Value |
 |---|---|
-| Agent tests (`cargo test --workspace`) | **142 passed, 0 failed** |
+| Agent tests (`cargo test --workspace`) | **146 passed, 0 failed, 2 ignored** (`mdns_discovery` and `relay_live` need a live network peer / running relay) |
 | Relay tests (Node 24.18.1, live Postgres) | **70 passed, 0 failed** |
 | clippy — host, `--all-targets -D warnings` | exit 0 |
 | clippy — `x86_64-pc-windows-msvc`, `--all-targets -D warnings` | exit 0 |
 | Relay lint / typecheck | clean / clean |
 | Cross-tenant endpoints covered | **8** (+1 explicitly exempt) |
-| `osprey-ffi` → `aarch64-apple-ios` | builds; `Mach-O 64-bit arm64` objects; 20,027,192 B |
+| `osprey-ffi` → `aarch64-apple-ios` | builds; `Mach-O 64-bit arm64` objects; 20,027,208 B |
 | `osprey-ffi` → `aarch64-apple-ios-sim` | builds |
 | `ring` (C dependency) in the Apple dependency tree | **0** |
 | UniFFI Swift bindings generated on Linux | yes — `osprey_ffi.swift`, 73,285 B |
 | Generated protocol Swift, `swiftc -typecheck -swift-version 6` | **clean** (Swift 6.0.3 for Linux) |
-| iOS app Swift compiled against the Apple SDK | **NOT MEASURED** — no macOS/Xcode |
-| Largest source file | 518 lines — under the 600 limit |
+| iOS Swift ↔ real Rust, linked and run on Linux | **46 tests passed, 0 failed** — against a live `osprey-core` responder |
+| Swift files | 47 |
+| iOS app compiled against the **Apple SDK** | **NOT MEASURED** — no macOS/Xcode; Secure Enclave, camera and Keychain paths are unexercised |
+| `swiftlint --strict` | **NOT MEASURED** — binary not installable here (GitHub releases 403 through the proxy) |
+| `xcodegen generate` | **NOT MEASURED** — not installable here; `project.yml` parses but has never been consumed |
+| Largest source file | 563 lines (`osprey-svc/src/state.rs`) — under the 600 limit |
 | Codegen reproducibility | regenerating produces an empty git diff |
 | Agent idle CPU / RSS | **NOT MEASURED** — a P1 criterion, not P0 |
 
@@ -66,7 +70,7 @@ cd proto && pnpm generate                                 # then `git diff` must
 
 ## Deviations from brief
 
-All approved before implementation and recorded as amendments A1–A21 at the end
+All approved before implementation and recorded as amendments A1–A22 at the end
 of `docs/osprey-build-brief.md`. The load-bearing ones:
 
 - **A4 — the specified crypto was not implementable.** Ed25519 is a signature

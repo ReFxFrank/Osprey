@@ -36,6 +36,7 @@ Evidence: `artifacts/P0-plan-evidence/ios-crossbuild.md`.
 |---|---|
 | `hex` | Key fingerprints and the QR payload's hex fields; the operator has to read these. |
 | `time` | RFC 3339 timestamps for audit records, which must be machine-parsable after the fact. |
+| `p256` | Verifies the phone's Secure Enclave cross-signature (amendment A20). Pinned to 0.13 rather than 0.14 on purpose: 0.14 pulls a second generation of the RustCrypto stack alongside the one `ed25519-dalek` already uses, giving the build two copies of the primitives the trust model rests on. Pure Rust, so the Apple cross-build stays free of C toolchains. |
 | `windows` (cfg windows) | DPAPI `CryptProtectData`/`CryptUnprotectData` for the machine-scoped keystore (§6.1, amendment A12). Scoped to `cfg(windows)` so non-Windows builds never pull it. |
 | `tempfile` (dev) | Isolated directories for keystore round-trip tests. |
 
@@ -48,6 +49,7 @@ rule 5's bar.
 | Crate | Why |
 |---|---|
 | `uuid` | Envelope correlation ids (§5.1 specifies a UUID). |
+| `base64` | Byte fields on the wire are base64, matching what Foundation's `JSONDecoder` produces on the Swift side; both ends are pinned explicitly rather than relying on a default. |
 
 ## Agent — `osprey-svc`
 
@@ -59,6 +61,21 @@ rule 5's bar.
 | `qrcode` | Renders the pairing QR as Unicode half-blocks in the terminal. Encoding QR by hand is not a fifteen-line job. |
 | `if-addrs` | Enumerates local interfaces to populate the QR's `lan_hints` and to bind the listener to private addresses only (amendment A6/A7). |
 | `ureq` | Blocking HTTP client for the relay REST calls. Blocking suits a console binary with no async runtime; async arrives with the P1 service. |
+| `mdns-sd` | Advertises `_osprey._tcp` for LAN discovery (amendment A6). Pure Rust with no async-runtime dependency, so it does not impose a runtime on a console binary that has none. |
+| `hex` | Renders key fingerprints the operator reads off the screen to confirm a pin. |
+| `uuid` | Device ids, shared with the protocol layer. |
+| `base64` | Encodes key material in the QR payload and in relay requests, matching the protocol layer's encoding. |
+| `tempfile` (dev) | Test isolation. |
+
+## Agent — `osprey-ffi`
+
+The Rust↔Swift bridge, so the iOS client runs the same Noise implementation as
+the agent rather than a second, independently written one.
+
+| Crate | Why |
+|---|---|
+| `uniffi` | Generates the Swift bindings from the Rust surface. `default-features = false` keeps the code generator out of the shipping library; the `bindgen-cli` feature enables it only for the `uniffi-bindgen` binary that emits the bindings at build time. |
+| `osprey-core`, `osprey-proto` | The crate is a thin adapter over these; it holds no protocol logic of its own. |
 | `tempfile` (dev) | Test isolation. |
 
 ## Relay (`relay/package.json`)

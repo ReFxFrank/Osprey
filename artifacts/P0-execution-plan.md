@@ -1,6 +1,19 @@
 # TETHER — P0 Execution Plan
 
-*Planning deliverable. No implementation code written this session. Awaiting approval before building P0.*
+> **SUPERSEDED — historical record.** This is the pre-implementation plan, kept
+> for its analysis rather than its instructions. P0 has since been built; for
+> current status read `artifacts/gate-P0.md`, and for the decisions that were
+> actually taken read the Amendment Log (A1–A22) at the end of
+> `docs/osprey-build-brief.md`.
+>
+> It predates the rename from TETHER to Osprey (amendment A1), so crate and path
+> names throughout are stale. Its §6 asks four questions that amendments A2/A21,
+> A3, A19 and the approvals in A4–A17 have all since answered. One detail is now
+> actively wrong: §2 #2 suggests `ring` as the CSPRNG, but `ring` is deliberately
+> excluded from the tree — its C build script cannot cross-compile to Apple
+> targets — and the pairing secret is 32 bytes, not 16.
+>
+> Its §2 remains the clearest explanation of *why* amendments A4 and A5 exist.
 
 Every crate version, API signature, and platform limit below was verified against current (2026-08-02) upstream sources or by a reproducible test run in this environment — not recalled. Where I ran code, the command is cited. Evidence lives in `artifacts/P0-plan-evidence/`.
 

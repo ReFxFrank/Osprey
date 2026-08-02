@@ -53,7 +53,7 @@ These are what separate this from malware and what make public distribution defe
 5. No dependency without a one-line justification in `docs/deps.md`.
 6. Comments explain *why*, never *what*.
 7. No abstraction with one implementation. No `IMetricsProviderFactory`.
-8. No feature not in brief §7. Ideas go in `docs/ideas.md`.
+8. No feature not in brief §7. Ideas go in `docs/ideas.md` (create it when the first idea needs recording).
 9. No mock data on a shipping path. Unbuilt subsystems render an explicit "not implemented" state, never a plausible fake number.
 10. Unfinished work is marked `TODO(frank):` with the decision needed. Nothing else — no `// fix later`, no stub returning `Ok(())`.
 11. No placeholder content in shipped UI. No lorem ipsum, no sample charts.
@@ -86,24 +86,32 @@ cd agent && cargo test --workspace
 # caught a break that was invisible on a Linux-only run.
 cd agent && cargo clippy --workspace --all-targets --target x86_64-pc-windows-msvc -- -D warnings
 
-# Relay — requires Node >= 24 and a reachable Postgres
+# Relay — requires Node >= 24 and a reachable Postgres.
+# Use the package scripts, NOT drizzle-kit directly: db:migrate runs roles.sql,
+# then the migrations, then grants.sql. Skipping roles.sql makes the migration
+# fail, because the initial migration grants policies to a role it creates.
 cd relay && pnpm install && pnpm dev
-cd relay && pnpm drizzle-kit generate && pnpm drizzle-kit migrate
-cd relay && pnpm test
+cd relay && pnpm db:generate && pnpm db:migrate
+cd relay && pnpm test && pnpm lint && pnpm typecheck
 
 # Protocol codegen — run after ANY change to proto/messages.toml
 cd proto && pnpm generate
 
-# iOS
-open ios/Osprey/Osprey.xcodeproj
+# iOS — the .xcodeproj is generated and gitignored; project.yml is the source of
+# truth. Build the framework first or the project references nothing.
+# Requires macOS. See docs/ios-build.md.
+scripts/build-xcframework.sh
+cd ios/Osprey && xcodegen generate && open Osprey.xcodeproj
 ```
 
-Service install/uninstall requires an elevated PowerShell:
+The agent binary currently has three subcommands and no service registration —
+`pair`, `run`, `unpair`. Installing `osprey-svc` as a Windows service is P1 work
+that does not exist yet, so there is no `install`/`uninstall` to run:
 
 ```powershell
-.\target\debug\osprey-svc.exe install
-.\target\debug\osprey-svc.exe uninstall
-Get-Service Osprey
+.\agent\target\debug\osprey-svc.exe pair
+.\agent\target\debug\osprey-svc.exe run
+.\agent\target\debug\osprey-svc.exe unpair <device-id|all>
 ```
 
 ---

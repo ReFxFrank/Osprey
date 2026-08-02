@@ -765,7 +765,7 @@ As written, §6.1's flow lets a fully compromised relay (which §6.2 says we mus
 
 **Amendment.** The QR carries a **`pairing_secret`** (≥256 bits, CSPRNG) that the relay **never sees**. Rendezvous uses **`routing_id = SHA-256(pairing_secret)`** — the only value the relay stores or receives. Authentication uses `pairing_secret` as the **Noise PSK**: pairing runs `Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s`. Only the physical scanner of the QR can complete the handshake, so "physical access is required to enroll" becomes a cryptographic property rather than a UX convention. Sessions *after* pairing run plain `Noise_IK` on the pinned statics, since the pin is then the authentication.
 
-The QR payload becomes `{relay_url, account_id, device_id, agent_identity_pubkey, lan_hints, pairing_secret}`. The old `one_time_token` is replaced by `routing_id`.
+The QR payload becomes `{v, relay_url, account_id, device_id, agent_identity, lan_hints, pairing_secret}` (as shipped in `agent/osprey-core/src/pairing/qr.rs`). Note `agent_identity` is a full `PublicIdentity` — the identity key *and* its cross-signed Noise static, not a bare public key — and `v` versions the payload. The old `one_time_token` is replaced by `routing_id`.
 
 ### A6 — QR gains `lan_hints`; mDNS pulled into P0
 Gate P0 requires an authenticated ping/pong "over the local network," but the QR payload carried no address and mDNS (§3.1 step 1) was not in the P0 build list — the phone had no way to find the agent. **Amendment:** the QR carries `lan_hints` (the agent's private IPv4/IPv6 addresses and listener port), valid by construction because the phone is physically present at pairing; and minimal mDNS (`_osprey._tcp`) is pulled forward into P0 as the durable discovery path.
@@ -916,6 +916,6 @@ Pinned by, and reproducible from:
   `testCrossCertificateContextIsExactlyTheAgentsConstant` asserts the separator
   literally rather than reconstructing it.
 
-The constants live at `osprey_core::identity::CROSS_SIG_CONTEXT` and
+The constants are defined (privately, not exported) in `agent/osprey-core/src/identity.rs` as `CROSS_SIG_CONTEXT` and
 `SignedBytes.crossCertificateContext`; the layouts at
-`osprey_core::identity::cross_sig_message` and `SignedBytes.crossCertificate`.
+`cross_sig_message`, mirrored in Swift by `SignedBytes.crossCertificate`. Callers outside the crate obtain the bytes through the exported `cross_certificate_bytes(...)` rather than rebuilding them.

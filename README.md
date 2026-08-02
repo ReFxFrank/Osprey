@@ -14,7 +14,7 @@ reach a machine that has not completed physical-access QR pairing.
 | Component | State |
 |---|---|
 | Protocol (`proto/`, codegen to Rust + Swift) | Built, tested |
-| Agent core + service (`agent/`) | Built, tested — **142 tests**; clippy clean on host and `x86_64-pc-windows-msvc` |
+| Agent core + service (`agent/`) | Built, tested — **146 tests**; clippy clean on host and `x86_64-pc-windows-msvc` |
 | Relay (`relay/`) | Built, tested — **70 tests** on Node 24 against live Postgres |
 | Rust↔Swift bridge (`agent/osprey-ffi`) | Cross-builds to `Mach-O arm64` for iOS device and simulator **from Linux** |
 | iOS client (`ios/`) | Source written; **never compiled against the Apple SDK** |
@@ -28,7 +28,7 @@ That is a scope failure, not a defect failure.
 
 | To… | Read |
 |---|---|
-| Understand the system | `docs/osprey-build-brief.md` — the specification. Its **Amendment Log (A1–A21)** at the end records every approved deviation and supersedes the body where they conflict. |
+| Understand the system | `docs/osprey-build-brief.md` — the specification. Its **Amendment Log (A1–A22)** at the end records every approved deviation and supersedes the body where they conflict. |
 | Know exactly where things stand | `artifacts/gate-P0.md` |
 | Finish P0 on the cloud Mac | `docs/ios-build.md` |
 | Run what exists today | `docs/setup.md` |
