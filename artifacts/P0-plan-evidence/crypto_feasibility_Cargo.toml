@@ -1,0 +1,10 @@
+[package]
+name = "snowcheck"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+snow = "0.10"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
