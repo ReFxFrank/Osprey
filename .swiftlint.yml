@@ -3,9 +3,19 @@
 # Gate P0 criterion 7 requires "swiftlint clean", which means nothing without a
 # fixed rule set — so this file exists to pin what "clean" is. Run it as
 #
-#     swiftlint --strict
+#     swiftlint lint --config .swiftlint.yml --strict
 #
-# so warnings fail as well; otherwise "clean" quietly degrades to "no errors".
+# from the REPOSITORY ROOT, so warnings fail as well; otherwise "clean" quietly
+# degrades to "no errors".
+#
+# The working directory matters. SwiftLint resolves an implicit config by
+# walking up from the files it lints, so `cd ios && swiftlint` never finds this
+# file and silently falls back to the default rule set — under which
+# `ios/Osprey/Osprey/Generated/` is not excluded and eight generated lines
+# breach the default 200-column error. .github/workflows/ios.yml therefore
+# passes --config explicitly and does not set working-directory; the `included`
+# and `excluded` paths below are written relative to the repository root to
+# match.
 
 included:
   - ios
@@ -33,6 +43,17 @@ line_length:
   error: 160
   ignores_comments: false
   ignores_urls: true
+
+# CLAUDE.md rule 10 *requires* unfinished work to be marked `TODO(frank):` with
+# the decision needed. SwiftLint's `todo` rule is on by default and matches that
+# form — including inside `///` doc comments — so with it enabled `--strict`
+# could never pass while a single mandated marker exists, and gate criterion 7
+# would be unsatisfiable by construction. Narrowing the rule to FIXME keeps the
+# marker the project mandates legal while still catching casual `// FIXME`,
+# which nothing in CLAUDE.md sanctions.
+todo:
+  only:
+    - FIXME
 
 identifier_name:
   # Cryptographic code legitimately uses short names for well-known quantities
