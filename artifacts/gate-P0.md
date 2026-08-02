@@ -157,7 +157,7 @@ original attack rather than by re-reading the diff.
 | # | Item | Status |
 |---|---|---|
 | 1 | Final product name | **RESOLVED — Osprey** (A1) |
-| 4 | Bundle identifier + APNs key id | **Half resolved** — `com.ospreyremote.app`, **registered 2026-08-02** under Team ID `FM8Z8BA64H` (A21). `com.osprey.app` was rejected: a wildcard `com.osprey.*` blocks every explicit id beneath it, so that prefix is unusable. The APNs `.p8` half remains open and is genuinely P8. |
+| 4 | Bundle identifier + APNs key id | **P0 half CLOSED** — `com.ospreyremote.app` (Explicit) and the iPhone UDID both registered 2026-08-02 under Team ID `FM8Z8BA64H` (A21). `com.osprey.app` was rejected: a wildcard `com.osprey.*` blocks every explicit id beneath it, so that prefix is unusable — do not retry it. The APNs `.p8` half remains open and is genuinely P8. |
 | 5 | Relay domain + VPS | Open; not needed until P5. |
 | 11 | One host or a device list | Open and **not blocking** — `devices.kind` plus the `pairings` join supports N agents per account without prejudging the UI. |
 | 6, 8, 9, 10, 12, 13 | Sensors driver, signing cert, indicator style, denylist, review doc, desktop client | Open, all later phases. |
@@ -167,9 +167,10 @@ original attack rather than by re-reading the diff.
 **No — finish P0 first.** The remaining work is bounded, and all of it needs the
 cloud Mac. Follow `docs/ios-build.md`.
 
-1. ~~Register the App ID~~ — **done**; `com.ospreyremote.app` is registered. Still
-   register the iPhone's UDID under **Devices** in the portal, or no development
-   profile will install on it.
+1. ~~Register the App ID and the device~~ — **done 2026-08-02**.
+   `com.ospreyremote.app` (Explicit) and the iPhone's UDID are both registered
+   under Team ID `FM8Z8BA64H`, so the portal side is complete and Xcode's
+   automatic signing can mint the certificate and profile on the Mac.
 2. `cd ios/Osprey && xcodegen generate`.
 3. `scripts/build-xcframework.sh` — note the Rust static libraries **and** the
    UniFFI Swift bindings already build on Linux, so only lipo,

@@ -167,9 +167,11 @@ cheap. Per amendment A21, changing the bundle id after first pairing
 re-pair** — the identity key, the Noise static and the host pin all live in the
 keychain under that identity.
 
-Still outstanding in the portal: **register the iPhone.** **Devices** → **+** →
-platform iOS, paste the UDID, name it. §5.1 explains how to read the UDID from
-the Windows PC. Without it, no development profile will install on the device.
+The iPhone is also **registered under Devices** (done 2026-08-02), so the portal
+side is complete. With an App ID and a registered device in place, Xcode's
+automatic signing can mint the development certificate and provisioning profile
+for you on the Mac — §3's manual certificate route is optional and only worth it
+if you want signing artifacts that do not depend on the Mac.
 
 Xcode's automatic signing *can* mint an App ID for you on first build. It was
 done by hand anyway, because automatic creation surfaces a name collision as an
