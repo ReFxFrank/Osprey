@@ -169,6 +169,15 @@ const cases: TenantCase[] = [
       );
     },
   },
+  /**
+   * `routes/ws.ts` answers `not_found` for two different things: the pairing
+   * check failing, and the peer simply not being connected. Asserting only the
+   * code therefore proves nothing — with the foreign socket left unopened, a
+   * build in which `peerIsPaired` had been deleted outright would still produce
+   * `not_found`, from the hub miss instead. Both cases below open the foreign
+   * tenant's socket for real, assert the message that distinguishes the two
+   * outcomes, and assert the foreign socket received nothing.
+   */
   {
     name: 'WS /v1/agent cannot relay to, or impersonate, another tenant',
     covers: ['GET /v1/agent'],
@@ -176,15 +185,24 @@ const cases: TenantCase[] = [
       const sockets: WsClient[] = [];
       try {
         const agentA = await openWs(`${wsUrl}/v1/agent`, a.agentToken);
-        sockets.push(agentA);
+        const clientB = await openWs(`${wsUrl}/v1/client`, b.clientToken);
+        sockets.push(agentA, clientB);
 
-        // Targeting a device id that exists, but in another tenant.
+        // B's client is connected and its device id exists — so a hub miss is
+        // ruled out and only the pairing check can produce this rejection.
         agentA.send({ t: 'relay', to: b.clientDeviceId, payload: 'Y2lwaGVy' });
-        expect(await agentA.next()).toMatchObject({ t: 'error', code: 'not_found' });
+        expect(await agentA.next()).toEqual({ t: 'error', code: 'not_found', message: 'Not found' });
+        await clientB.receivedNothing();
 
         // A's token on the agent endpoint authenticates as A's agent, never B's.
+        // A's own client is deliberately not connected, which is the other
+        // not_found — and it must read differently.
         agentA.send({ t: 'relay', to: a.clientDeviceId, payload: 'Y2lwaGVy' });
-        expect(await agentA.next()).toMatchObject({ t: 'error', message: 'Peer is not connected' });
+        expect(await agentA.next()).toEqual({
+          t: 'error',
+          code: 'not_found',
+          message: 'Peer is not connected',
+        });
 
         await expect(openWs(`${wsUrl}/v1/agent`, `${b.accountId}.forged-secret`)).rejects.toThrow(/401/);
       } finally {
@@ -200,10 +218,14 @@ const cases: TenantCase[] = [
       try {
         const clientA = await openWs(`${wsUrl}/v1/client`, a.clientToken);
         const agentA = await openWs(`${wsUrl}/v1/agent`, a.agentToken);
-        sockets.push(clientA, agentA);
+        const agentB = await openWs(`${wsUrl}/v1/agent`, b.agentToken);
+        sockets.push(clientA, agentA, agentB);
 
         clientA.send({ t: 'relay', to: b.agentDeviceId, payload: 'Y2lwaGVy' });
-        expect(await clientA.next()).toMatchObject({ t: 'error', code: 'not_found' });
+        expect(await clientA.next()).toEqual({ t: 'error', code: 'not_found', message: 'Not found' });
+        await agentB.receivedNothing();
+        // And A's own agent, the legitimate peer, is not handed the frame either.
+        await agentA.receivedNothing();
 
         clientA.send({ t: 'relay', to: a.agentDeviceId, payload: 'Y2lwaGVy' });
         expect(await agentA.next()).toEqual({
@@ -211,6 +233,7 @@ const cases: TenantCase[] = [
           from: a.clientDeviceId,
           payload: 'Y2lwaGVy',
         });
+        await agentB.receivedNothing();
 
         // A client token presented on the agent endpoint is rejected outright.
         const wrongKind = await openWs(`${wsUrl}/v1/agent`, a.clientToken);

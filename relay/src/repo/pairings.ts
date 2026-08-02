@@ -4,35 +4,8 @@ import { withTenant } from '../db/client.ts';
 import { pairings } from '../db/schema.ts';
 import { insertAudit } from './audit.ts';
 
-export interface PairingSummary {
-  readonly id: string;
-  readonly agentDeviceId: string;
-  readonly clientDeviceId: string;
-  readonly createdAt: string;
-}
-
 export function createPairingRepo(db: Db) {
   return {
-    listForDevice: (accountId: string, deviceId: string): Promise<PairingSummary[]> =>
-      withTenant(db, accountId, async (tx) => {
-        const rows = await tx
-          .select()
-          .from(pairings)
-          .where(
-            and(
-              eq(pairings.accountId, accountId),
-              or(eq(pairings.agentDeviceId, deviceId), eq(pairings.clientDeviceId, deviceId)),
-              isNull(pairings.revokedAt),
-            ),
-          );
-        return rows.map((r) => ({
-          id: r.id,
-          agentDeviceId: r.agentDeviceId,
-          clientDeviceId: r.clientDeviceId,
-          createdAt: r.createdAt.toISOString(),
-        }));
-      }),
-
     /** Live-pairing check used to authorise WebSocket relaying between two devices. */
     peerIsPaired: (accountId: string, deviceId: string, peerDeviceId: string): Promise<boolean> =>
       withTenant(db, accountId, async (tx) => {

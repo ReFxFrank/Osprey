@@ -92,11 +92,6 @@ impl PairingOffer {
         }
     }
 
-    /// Open a fresh offer with the default 120-second window.
-    pub fn generate() -> Self {
-        Self::new(PairingSecret::generate(), DEFAULT_PAIRING_TTL)
-    }
-
     pub fn secret(&self) -> &PairingSecret {
         &self.secret
     }

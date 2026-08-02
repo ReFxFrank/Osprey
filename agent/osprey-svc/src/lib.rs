@@ -27,5 +27,6 @@ pub mod paths;
 pub mod qrterm;
 pub mod registry;
 pub mod relay;
+pub mod revoke;
 pub mod session;
 pub mod state;

@@ -1,13 +1,15 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { buildApp, quotaDefaultsFrom, type RelayApp } from '../../src/app.ts';
 import { loadConfig, type RelayConfig } from '../../src/config.ts';
-import { createRepoFromUrl, type RepoHandle } from '../../src/repo/index.ts';
+import { createRepoFromUrl, type Repo, type RepoHandle } from '../../src/repo/index.ts';
 import { appUrl } from './pg.ts';
 
 export const TEST_ENROLLMENT_SECRET = 'test-enrollment-secret-0123456789abcdef';
 
 export interface Harness extends RelayApp {
   readonly config: RelayConfig;
+  /** The wired repository, so a test can enumerate the surface routes can reach. */
+  readonly repo: Repo;
   close(): Promise<void>;
 }
 
@@ -20,12 +22,13 @@ export async function startHarness(overrides: Record<string, string> = {}): Prom
     ...overrides,
   } as NodeJS.ProcessEnv);
 
-  const handle: RepoHandle = createRepoFromUrl(config.databaseUrl, quotaDefaultsFrom(config), 5);
+  const handle: RepoHandle = await createRepoFromUrl(config.databaseUrl, quotaDefaultsFrom(config), 5);
   const relay = await buildApp(config, handle.repo);
 
   return {
     ...relay,
     config,
+    repo: handle.repo,
     close: async () => {
       await relay.app.close();
       await handle.close();

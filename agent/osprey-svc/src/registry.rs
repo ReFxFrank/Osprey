@@ -166,6 +166,7 @@ pub fn spawn_revocation_watcher(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use osprey_core::identity::DeviceIdentity;
     use std::io::Read;
     use std::net::TcpListener;
 
@@ -211,12 +212,10 @@ mod tests {
         let registry = SessionRegistry::new();
         let (_c1, s1) = connected_pair();
         let (_c2, s2) = connected_pair();
-        let _h1 = registry.register([1u8; 32], s1);
-        let _h2 = registry.register([2u8; 32], s2);
-        let allowed = vec![PinnedPeer {
-            identity_pub: [1u8; 32],
-            noise_static_pub: [0u8; 32],
-        }];
-        assert_eq!(registry.retain_pinned(&allowed), 1);
+        let kept = PinnedPeer::pin(DeviceIdentity::generate().public()).expect("pin");
+        let dropped = PinnedPeer::pin(DeviceIdentity::generate().public()).expect("pin");
+        let _h1 = registry.register(kept.identity_pub, s1);
+        let _h2 = registry.register(dropped.identity_pub, s2);
+        assert_eq!(registry.retain_pinned(&[kept]), 1);
     }
 }

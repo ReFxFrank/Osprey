@@ -162,13 +162,12 @@ describe('pairing token lifecycle', () => {
     expect((await redeem(h, agent.accountId, routingId)).statusCode).toBe(404);
   });
 
-  it('records pairing success, rejection and revocation in audit_relay', async () => {
+  it('records pairing success and revocation in audit_relay', async () => {
     const agent = await enrollAgent(h, 'agent');
     const { routingId } = pairingSecret();
     await issue(h, agent.deviceToken, routingId);
     const redeemed = await redeem(h, agent.accountId, routingId);
     const { pairingId, deviceToken } = redeemed.json() as { pairingId: string; deviceToken: string };
-    await redeem(h, agent.accountId, routingId, 'replay');
     await h.app.inject({
       method: 'DELETE',
       url: `/v1/pairings/${pairingId}`,
@@ -181,8 +180,66 @@ describe('pairing token lifecycle', () => {
       expect(events).toContain('account.created');
       expect(events).toContain('pairing.token_issued');
       expect(events).toContain('pairing.succeeded');
-      expect(events).toContain('pairing.token_rejected');
       expect(events).toContain('pairing.revoked');
     });
+  });
+
+  /**
+   * The audit log is a mandated, non-suppressible control, so what may write to
+   * it is part of its definition. A rejection is only attributable to a tenant
+   * once the caller has proved possession of the QR secret — which is exactly
+   * the moment the redeem UPDATE claims a row.
+   */
+  it('audits a rejection only after the caller has claimed the token row', async () => {
+    const agent = await enrollAgent(h, 'agent');
+    const { routingId } = pairingSecret();
+    await issue(h, agent.deviceToken, routingId);
+    await withOwnerSql(async (owner) => {
+      await owner`update devices set revoked_at = now() where id = ${agent.deviceId}`;
+    });
+
+    expect((await redeem(h, agent.accountId, routingId)).statusCode).toBe(404);
+
+    await withOwnerSql(async (owner) => {
+      const rows = await owner<{ event: string; detail: { reason?: string } }[]>`
+        select event, detail from audit_relay where event = 'pairing.token_rejected'
+      `;
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.detail.reason).toBe('agent_device_revoked');
+    });
+  });
+
+  /**
+   * Suppressing the miss-path audit write is what closed the amplification, but
+   * over-suppressing it blinds the log to real replays. A routing id is
+   * SHA-256(pairing_secret), so a caller presenting one that matches a stored
+   * row has proved QR possession and cannot be an anonymous flooder.
+   */
+  it('audits a replayed token but stays silent for a routing id that matches nothing', async () => {
+    const agent = await enrollAgent(h, 'agent');
+    const { routingId } = pairingSecret();
+    await issue(h, agent.deviceToken, routingId);
+    await withOwnerSql(async (owner) => {
+      await owner`update pairing_tokens set expires_at = now() - interval '1 hour' where routing_id = ${routingId}`;
+    });
+
+    // Correct routing id, but the token is past its TTL: a real near-miss.
+    expect((await redeem(h, agent.accountId, routingId)).statusCode).toBe(404);
+
+    const auditedReasons = async () =>
+      withOwnerSql(async (owner) => {
+        const rows = await owner<{ detail: { reason?: string } }[]>`
+          select detail from audit_relay where event = 'pairing.token_rejected'
+        `;
+        return rows.map((r) => r.detail.reason);
+      });
+
+    expect(await auditedReasons()).toEqual(['token_expired']);
+
+    // A flood of routing ids matching no row must not add anything.
+    for (let i = 0; i < 25; i += 1) {
+      await redeem(h, agent.accountId, pairingSecret().routingId);
+    }
+    expect(await auditedReasons()).toEqual(['token_expired']);
   });
 });

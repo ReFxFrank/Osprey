@@ -31,6 +31,9 @@ pub struct PairOptions {
     pub lan_only: bool,
     pub port: u16,
     pub ttl: Duration,
+    /// Also print the QR's decoded JSON, which contains the pairing secret.
+    /// Off unless the operator asks (see [`print_offer`]).
+    pub print_payload: bool,
 }
 
 impl Default for PairOptions {
@@ -41,6 +44,7 @@ impl Default for PairOptions {
             lan_only: false,
             port: DEFAULT_LAN_PORT,
             ttl: DEFAULT_PAIRING_TTL,
+            print_payload: false,
         }
     }
 }
@@ -125,7 +129,7 @@ pub fn execute(host: &mut Host, options: &PairOptions, out: &mut dyn Write) -> R
         listener.addresses().to_vec(),
         offer.secret().clone(),
     );
-    print_offer(&payload, &listener, out)?;
+    print_offer(&payload, &listener, options.print_payload, out)?;
 
     let peer = accept_one(host, &listener, &mut offer, options.ttl)?;
     let paired = PairedPeer {
@@ -207,7 +211,21 @@ fn lookup_relay_device(
     }
 }
 
-fn print_offer(payload: &QrPayload, listener: &LanListener, out: &mut dyn Write) -> Result<()> {
+/// Render the offer for a human.
+///
+/// The QR itself is unavoidable — it *is* the pairing channel, and it is
+/// transient pixels that disappear with the scrollback. The decoded JSON is not:
+/// it carries the `pairing_secret`, the PSK that makes physical access a
+/// cryptographic property rather than a convention, and as text it survives
+/// shell redirection, terminal scrollback, a tmux capture, and (from P1, under
+/// the service wrapper) whatever collects the service's stdout. So it is printed
+/// only when `print_payload` is set, which nothing sets by default.
+fn print_offer(
+    payload: &QrPayload,
+    listener: &LanListener,
+    print_payload: bool,
+    out: &mut dyn Write,
+) -> Result<()> {
     let text = payload.encode()?;
     writeln!(out, "\nScan this with the Osprey app on your phone:\n")?;
     writeln!(out, "{}", qrterm::render(&text)?)?;
@@ -220,13 +238,12 @@ fn print_offer(payload: &QrPayload, listener: &LanListener, out: &mut dyn Write)
         "\nHost identity fingerprint: {}",
         payload.agent_identity.fingerprint().short()
     )?;
-    // The payload contains the pairing secret, so this is not debug output that
-    // can be left on by default; the caller decides, and the operator sees it
-    // only because they asked.
-    writeln!(
-        out,
-        "\nPayload (contains the pairing secret — do not share):\n{text}\n"
-    )?;
+    if print_payload {
+        writeln!(
+            out,
+            "\nPayload (contains the pairing secret — do not share):\n{text}\n"
+        )?;
+    }
     out.flush().context("could not write the pairing offer")?;
     Ok(())
 }

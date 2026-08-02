@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { createRepoFromUrl } from '../src/repo/index.ts';
 import { createAccount, startHarness, type Account, type Harness } from './support/harness.ts';
-import { openAppConnection, truncateAll } from './support/pg.ts';
+import { openAppConnection, ownerUrl, TENANT_TABLES, truncateAll } from './support/pg.ts';
 
 /**
  * RLS is the backstop, not the mechanism (brief §6.7). These tests exist because
@@ -115,6 +116,55 @@ describe('row-level security backstop', () => {
     } finally {
       await sql.end({ timeout: 5 });
     }
+  });
+
+  /**
+   * Everything above holds only because the runtime role happens not to own the
+   * tables. FORCE removes the "happens to": with it set, even the owner is
+   * subject to the policies, so pointing the relay at the migrator credentials
+   * fails closed instead of disclosing every tenant. Both `src/db/migrate.ts`
+   * and `drizzle.config.ts` fall back to DATABASE_URL when
+   * DATABASE_URL_MIGRATOR is absent, so the two roles are one omission apart.
+   */
+  it('forces row level security on every tenant table, not merely enables it', async () => {
+    const sql = openAppConnection();
+    try {
+      const rows = await sql<{ name: string; enabled: boolean; forced: boolean }[]>`
+        select c.relname::text as name, c.relrowsecurity as enabled, c.relforcerowsecurity as forced
+        from pg_class c join pg_namespace n on n.oid = c.relnamespace
+        where n.nspname = 'public' and c.relkind = 'r'
+      `;
+      const byName = new Map(rows.map((r) => [r.name, r]));
+      expect([...byName.keys()].sort()).toEqual([...TENANT_TABLES].sort());
+      for (const table of TENANT_TABLES) {
+        expect(byName.get(table)?.enabled, `${table} RLS enabled`).toBe(true);
+        expect(byName.get(table)?.forced, `${table} RLS forced`).toBe(true);
+      }
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+  });
+
+  it('refuses to start when pointed at a connection that can bypass the policies', async () => {
+    // The owner connection the migrator uses. Booting the relay on it is the
+    // silent-failure mode plan item 12 warns about, so it must be loud.
+    await expect(
+      createRepoFromUrl(ownerUrl, {
+        maxDevices: 1,
+        maxPairingAttemptsPerHour: 1,
+        turnBytesPerMonth: 1n,
+      }),
+    ).rejects.toThrow(/Refusing to start/);
+  });
+
+  it('names the reason it refused, so the misconfiguration is actionable', async () => {
+    await expect(
+      createRepoFromUrl(ownerUrl, {
+        maxDevices: 1,
+        maxPairingAttemptsPerHour: 1,
+        turnBytesPerMonth: 1n,
+      }),
+    ).rejects.toThrow(/SUPERUSER|BYPASSRLS|owned by the connected role/);
   });
 
   it('denies DDL to the application role', async () => {

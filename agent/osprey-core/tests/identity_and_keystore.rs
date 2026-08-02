@@ -94,6 +94,25 @@ fn rotation_keeps_the_pin_and_replaces_the_static() {
 }
 
 #[test]
+fn a_pin_carries_its_cross_signature_and_re_verifies() {
+    let agent = DeviceIdentity::generate();
+    let peer = PinnedPeer::pin(agent.public()).expect("pin");
+    assert_eq!(peer.noise_static_sig, agent.public().noise_static_sig);
+    peer.verify().expect("a freshly made pin must re-verify");
+
+    // What an edit to the on-disk pin store looks like: an attacker-chosen
+    // session key under the operator's identity key. The signature the pin
+    // carries is what makes this detectable at load time rather than at no time.
+    let attacker = DeviceIdentity::generate();
+    let mut substituted = peer.clone();
+    substituted.noise_static_pub = attacker.public().noise_static_pub;
+    assert!(matches!(
+        substituted.verify(),
+        Err(Error::CrossSignature(_))
+    ));
+}
+
+#[test]
 fn rotation_offered_by_a_different_identity_is_refused() {
     let agent = DeviceIdentity::generate();
     let attacker = DeviceIdentity::generate();

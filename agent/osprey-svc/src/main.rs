@@ -29,6 +29,7 @@ fn main() -> Result<()> {
             lan_only,
             port,
             ttl,
+            print_payload,
         } => {
             let options = pair::PairOptions {
                 relay_url,
@@ -36,6 +37,7 @@ fn main() -> Result<()> {
                 lan_only,
                 port,
                 ttl: Command::pairing_ttl(ttl),
+                print_payload,
             };
             pair::execute(&mut host, &options, &mut out)?;
             Ok(())

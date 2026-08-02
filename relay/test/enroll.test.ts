@@ -38,6 +38,17 @@ describe('agent enrollment guards', () => {
     expect(res.statusCode).toBe(400);
   });
 
+  /**
+   * Caddy is the only ingress and appends the address it observed to the right
+   * of whatever the client sent, so this is the header shape the relay actually
+   * receives. `CADDY_OBSERVED` is the real client; everything to its left is
+   * client-controlled text.
+   */
+  const CADDY_OBSERVED = '198.51.100.20';
+  const forwardedFor = (clientSupplied?: string) => ({
+    'x-forwarded-for': clientSupplied === undefined ? CADDY_OBSERVED : `${clientSupplied}, ${CADDY_OBSERVED}`,
+  });
+
   it('applies a global per-IP rate limit that no tenant can raise', async () => {
     h = await startHarness({ OSPREY_ENROLL_RATE_LIMIT_PER_HOUR: '2' });
     const codes: number[] = [];
@@ -45,11 +56,51 @@ describe('agent enrollment guards', () => {
       const res = await h.app.inject({
         method: 'POST',
         url: '/v1/agents/enroll',
+        // Stated explicitly rather than left to the injected socket address:
+        // the header is the input the limiter keys on, so a test that omits it
+        // is not testing the limiter under the conditions it runs in.
+        headers: forwardedFor(),
         payload: { enrollmentSecret: TEST_ENROLLMENT_SECRET, ...fakePeerMaterial('agent', `a${i}`) },
       });
       codes.push(res.statusCode);
     }
     expect(codes).toEqual([201, 201, 429, 429]);
+  });
+
+  /**
+   * The regression. With `trustProxy: true`, `request.ip` is the *leftmost*
+   * X-Forwarded-For entry — pure client input — so rotating it hands the caller
+   * a fresh bucket per request and the only structural bound on account
+   * creation (execution plan item 11) evaporates.
+   */
+  it('cannot be bypassed by rotating a client-supplied X-Forwarded-For', async () => {
+    h = await startHarness({ OSPREY_ENROLL_RATE_LIMIT_PER_HOUR: '2' });
+    const codes: number[] = [];
+    for (let i = 0; i < 8; i += 1) {
+      const res = await h.app.inject({
+        method: 'POST',
+        url: '/v1/agents/enroll',
+        headers: forwardedFor(`203.0.113.${i}`),
+        payload: { enrollmentSecret: TEST_ENROLLMENT_SECRET, ...fakePeerMaterial('agent', `spoof${i}`) },
+      });
+      codes.push(res.statusCode);
+    }
+    expect(codes).toEqual([201, 201, 429, 429, 429, 429, 429, 429]);
+  });
+
+  it('ignores forged hops however many the caller stacks up', async () => {
+    h = await startHarness({ OSPREY_ENROLL_RATE_LIMIT_PER_HOUR: '1' });
+    const codes: number[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      const res = await h.app.inject({
+        method: 'POST',
+        url: '/v1/agents/enroll',
+        headers: forwardedFor(`10.0.0.${i}, 172.16.0.${i}, 192.0.2.${i}`),
+        payload: { enrollmentSecret: TEST_ENROLLMENT_SECRET, ...fakePeerMaterial('agent', `stack${i}`) },
+      });
+      codes.push(res.statusCode);
+    }
+    expect(codes).toEqual([201, 429, 429]);
   });
 
   it('counts rejected attempts against the rate limit too', async () => {

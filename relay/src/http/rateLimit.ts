@@ -12,18 +12,30 @@
 export interface RateLimiter {
   /** Returns true when the caller is within budget, and consumes one unit. */
   consume(key: string): boolean;
+  /**
+   * Whether `consume` would currently succeed, without spending anything.
+   *
+   * Exists so a limiter can be checked *before* the work it protects while only
+   * charging for outcomes worth charging for — see the redeem route, where a
+   * successful pairing must not spend the tenant's own failure budget.
+   */
+  check(key: string): boolean;
   reset(): void;
 }
 
 export function createFixedWindowLimiter(limit: number, windowMs: number): RateLimiter {
   const windows = new Map<string, { count: number; expiresAt: number }>();
 
+  function evictExpired(now: number): void {
+    for (const [k, w] of windows) {
+      if (w.expiresAt <= now) windows.delete(k);
+    }
+  }
+
   return {
     consume(key: string): boolean {
       const now = Date.now();
-      for (const [k, w] of windows) {
-        if (w.expiresAt <= now) windows.delete(k);
-      }
+      evictExpired(now);
       const existing = windows.get(key);
       if (existing === undefined || existing.expiresAt <= now) {
         windows.set(key, { count: 1, expiresAt: now + windowMs });
@@ -31,6 +43,12 @@ export function createFixedWindowLimiter(limit: number, windowMs: number): RateL
       }
       existing.count += 1;
       return existing.count <= limit;
+    },
+    check(key: string): boolean {
+      const now = Date.now();
+      const existing = windows.get(key);
+      if (existing === undefined || existing.expiresAt <= now) return limit >= 1;
+      return existing.count < limit;
     },
     reset(): void {
       windows.clear();

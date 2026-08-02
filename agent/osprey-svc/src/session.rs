@@ -1,19 +1,24 @@
 //! Steady-state protocol handling on an established Noise session.
 //!
-//! P0 answers exactly two things: `hello` and `ping`. Everything else in the
-//! registry is reserved but unimplemented, and says so on the wire with an
-//! `unsupported` error rather than being quietly ignored — an ignored request
-//! is indistinguishable from a hung host, and the client cannot tell which.
+//! P0 answers `hello`, `ping` and `pair.revoke` — the last because a client-side
+//! unpair is a Gate P0 criterion and the agent is the only party that can act on
+//! one. Everything else in the registry is reserved but unimplemented, and says
+//! so on the wire with an `unsupported` error rather than being quietly ignored
+//! — an ignored request is indistinguishable from a hung host, and the client
+//! cannot tell which.
 
 use std::io::{Read, Write};
 
 use anyhow::{Context, Result};
+use osprey_core::identity::PinnedPeer;
 use osprey_core::noise::NoiseSession;
 use osprey_proto::{
-    Body, ByeBody, Capability, Envelope, ErrorBody, ErrorCode, HelloBody, HelloOkBody, MessageType,
-    PongBody, MIN_PROTOCOL_VERSION, PROTOCOL_VERSION,
+    Body, ByeBody, ByeReason, Capability, Envelope, ErrorBody, ErrorCode, HelloBody, HelloOkBody,
+    MessageType, PongBody, MIN_PROTOCOL_VERSION, PROTOCOL_VERSION,
 };
 use uuid::Uuid;
+
+use crate::revoke::RevocationHandler;
 
 /// Management-plane messages are small; file chunks arrive at P3 with their own
 /// bound. Capping reassembly here means a peer cannot make the agent buffer
@@ -27,14 +32,17 @@ pub struct SessionConfig {
     pub software_version: String,
 }
 
-/// How a served session ended. Both variants are ordinary outcomes; a dropped
-/// socket (including one dropped by an unpair) surfaces as an `Err` instead.
+/// How a served session ended. Every variant is an ordinary outcome; a dropped
+/// socket (including one dropped by a local unpair) surfaces as an `Err`
+/// instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionEnd {
     /// Peer sent `bye`.
     PeerSaidBye,
     /// Peer closed the transport on a message boundary.
     PeerClosed,
+    /// Peer sent a valid `pair.revoke`; its pin is gone and so is the session.
+    Revoked,
 }
 
 /// Summary of a completed session, for the caller's log line.
@@ -107,10 +115,16 @@ pub fn capabilities() -> Vec<Capability> {
 }
 
 /// Run the agent's half of a session to completion.
+///
+/// `peer` is the pin this session handshook against; it is the identity key a
+/// `pair.revoke` must verify under, and it must come from the host's own store
+/// rather than from anything the peer says.
 pub fn serve<S: Read + Write>(
     session: &mut NoiseSession,
     stream: &mut S,
     config: &SessionConfig,
+    peer: &PinnedPeer,
+    revocation: &RevocationHandler<'_>,
 ) -> Result<SessionReport> {
     session.set_max_message_len(MAX_SESSION_MESSAGE_LEN);
     let (peer_device_id, hello_id) = read_hello(session, stream)?;
@@ -138,7 +152,12 @@ pub fn serve<S: Read + Write>(
                 pings_answered,
             });
         };
-        match dispatch(session, stream, &envelope, &mut pings_answered)? {
+        let context = DispatchContext {
+            peer,
+            peer_device_id,
+            revocation,
+        };
+        match dispatch(session, stream, &envelope, &context, &mut pings_answered)? {
             Some(end) => {
                 return Ok(SessionReport {
                     end,
@@ -151,11 +170,20 @@ pub fn serve<S: Read + Write>(
     }
 }
 
+/// Who this session belongs to, as the host knows it rather than as the peer
+/// claims it.
+struct DispatchContext<'a> {
+    peer: &'a PinnedPeer,
+    peer_device_id: Uuid,
+    revocation: &'a RevocationHandler<'a>,
+}
+
 /// Handle one envelope. `Ok(Some(_))` ends the session.
 fn dispatch<S: Read + Write>(
     session: &mut NoiseSession,
     stream: &mut S,
     envelope: &Envelope,
+    context: &DispatchContext<'_>,
     pings_answered: &mut u64,
 ) -> Result<Option<SessionEnd>> {
     if let Err(err) = envelope.check_version() {
@@ -198,6 +226,23 @@ fn dispatch<S: Read + Write>(
             *pings_answered += 1;
             Ok(None)
         }
+        MessageType::PairRevoke => {
+            let body = match envelope.decode_body() {
+                Ok(Body::PairRevoke(body)) => body,
+                Ok(_) | Err(_) => {
+                    send_error(
+                        session,
+                        stream,
+                        envelope.id,
+                        ErrorCode::BadRequest,
+                        "pair.revoke body did not match the schema",
+                        false,
+                    )?;
+                    return Ok(None);
+                }
+            };
+            handle_revoke(session, stream, envelope.id, &body, context)
+        }
         MessageType::Bye => {
             // A `bye` whose body is unparseable still ends the session: the peer
             // has said it is leaving, and arguing about the reason field would
@@ -219,6 +264,76 @@ fn dispatch<S: Read + Write>(
             Ok(None)
         }
     }
+}
+
+/// Apply a `pair.revoke`, or tell the peer why it was refused.
+///
+/// A refusal leaves the session running: a forged or replayed revocation is
+/// exactly the case where dropping the connection would let an on-path attacker
+/// turn one bad message into a denial of service against a peer that is still
+/// legitimately paired.
+fn handle_revoke<S: Read + Write>(
+    session: &mut NoiseSession,
+    stream: &mut S,
+    id: Uuid,
+    body: &osprey_proto::PairRevokeBody,
+    context: &DispatchContext<'_>,
+) -> Result<Option<SessionEnd>> {
+    let applied = match context
+        .revocation
+        .apply(body, context.peer, context.peer_device_id)
+    {
+        Ok(applied) => applied,
+        Err(refusal) => {
+            tracing::warn!(
+                fingerprint = %context.peer.fingerprint().short(),
+                refusal = %refusal,
+                "refused a pair.revoke"
+            );
+            send_error(
+                session,
+                stream,
+                id,
+                refusal.code(),
+                &refusal.wire_message(),
+                false,
+            )?;
+            return Ok(None);
+        }
+    };
+
+    if let Some(err) = &applied.audit_error {
+        tracing::error!(
+            error = %err,
+            fingerprint = %applied.fingerprint.short(),
+            "unpaired on a peer's signed request, but the audit entry could not be written"
+        );
+    }
+    tracing::warn!(
+        fingerprint = %applied.fingerprint.short(),
+        "peer revoked its pairing; pin removed"
+    );
+
+    // The pin is already gone, so this `bye` is a courtesy that tells the peer
+    // its revocation landed. It is sent before any socket is shut down, and a
+    // failure to send it cannot un-revoke anything.
+    if let Err(err) = send(
+        session,
+        stream,
+        id,
+        &Body::Bye(ByeBody {
+            reason: ByeReason::Unpaired,
+            detail: Some("pair.revoke accepted; this device is no longer paired".to_owned()),
+        }),
+    ) {
+        tracing::warn!(error = %err, "could not acknowledge a pair.revoke before hanging up");
+    }
+
+    let closed = context.revocation.close_peer_sessions(context.peer);
+    if closed > 0 {
+        tracing::info!(closed, "closed live sessions for the revoked peer");
+    }
+    Ok(Some(SessionEnd::Revoked))
 }
 
 /// Read the opening `hello` and negotiate the envelope version.

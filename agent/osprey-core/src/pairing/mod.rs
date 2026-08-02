@@ -2,10 +2,15 @@
 
 mod flow;
 mod qr;
+mod revoke;
 mod secret;
 
 pub use flow::{initiate, record_unpair, respond, PairingOutcome};
 pub use qr::{QrPayload, QR_PAYLOAD_VERSION};
+pub use revoke::{
+    revocation_signing_bytes, verify_revocation, Revocation, RevocationCheck, RevocationRejection,
+    REVOKE_CLOCK_WINDOW, REVOKE_CONTEXT, REVOKE_NONCE_LEN,
+};
 pub use secret::{PairingOffer, PairingSecret, RoutingId, DEFAULT_PAIRING_TTL, PAIRING_SECRET_LEN};
 
 use serde::Serialize;

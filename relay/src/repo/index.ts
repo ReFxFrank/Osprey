@@ -1,10 +1,9 @@
-import { openDb, type Db } from '../db/client.ts';
+import { assertRlsBackstopIsLive, openDb, type Db } from '../db/client.ts';
 import { createAccountRepo, type QuotaDefaults } from './accounts.ts';
 import { createAuditRepo } from './audit.ts';
 import { createDeviceRepo } from './devices.ts';
 import { createPairingRepo } from './pairings.ts';
 import { createPairingTokenRepo } from './pairingTokens.ts';
-import { createQuotaRepo } from './quotas.ts';
 
 /**
  * The single seam between routes and the database (brief §4.2, §6.7).
@@ -31,7 +30,6 @@ export function createRepo(db: Db, quotaDefaults: QuotaDefaults) {
     devices: createDeviceRepo(db),
     pairings: createPairingRepo(db),
     pairingTokens: createPairingTokenRepo(db),
-    quotas: createQuotaRepo(db),
   };
 }
 
@@ -47,13 +45,23 @@ export interface RepoHandle {
  * `Db`. The composition root asks for a repository, not a database — which is
  * what lets the lint boundary forbid `db/` imports everywhere else without
  * carving out an exception for startup code.
+ *
+ * Asynchronous because it will not hand back a repository until the connection
+ * has been proved incapable of bypassing row-level security; a relay whose
+ * backstop is inert must fail to start, not start quietly (plan item 12).
  */
-export function createRepoFromUrl(
+export async function createRepoFromUrl(
   databaseUrl: string,
   quotaDefaults: QuotaDefaults,
   poolSize?: number,
-): RepoHandle {
+): Promise<RepoHandle> {
   const handle = openDb(databaseUrl, poolSize);
+  try {
+    await assertRlsBackstopIsLive(handle.db);
+  } catch (err: unknown) {
+    await handle.close();
+    throw err;
+  }
   return { repo: createRepo(handle.db, quotaDefaults), close: handle.close };
 }
 export type { QuotaDefaults } from './accounts.ts';

@@ -6,6 +6,13 @@ export interface WsClient {
   next(timeoutMs?: number): Promise<unknown>;
   /** Resolves with the close code once the socket closes. */
   closed(timeoutMs?: number): Promise<number>;
+  /**
+   * Resolves once `quietMs` has passed with nothing delivered, and rejects with
+   * whatever did arrive. Asserting on the *absence* of a frame is the only way
+   * to show that a rejected relay reached no one: a test that only inspects the
+   * sender's error would pass even if the payload had also been delivered.
+   */
+  receivedNothing(quietMs?: number): Promise<void>;
   close(): void;
 }
 
@@ -53,6 +60,24 @@ export function openWs(url: string, bearerToken: string): Promise<WsClient> {
           clearTimeout(timer);
           resolve(code);
         });
+      }),
+    receivedNothing: (quietMs = 300) =>
+      new Promise((resolve, reject) => {
+        const buffered = inbox.shift();
+        if (buffered !== undefined) {
+          reject(new Error(`expected silence, received ${JSON.stringify(buffered)}`));
+          return;
+        }
+        const timer = setTimeout(() => {
+          const index = waiters.indexOf(waiter);
+          if (index >= 0) waiters.splice(index, 1);
+          resolve();
+        }, quietMs);
+        const waiter = (value: unknown) => {
+          clearTimeout(timer);
+          reject(new Error(`expected silence, received ${JSON.stringify(value)}`));
+        };
+        waiters.push(waiter);
       }),
     close: () => socket.close(),
   };

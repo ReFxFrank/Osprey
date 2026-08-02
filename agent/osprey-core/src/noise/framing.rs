@@ -28,8 +28,11 @@ pub const CHUNK_HEADER_LEN: usize = 1;
 /// Largest slice of caller payload that fits in one chunk.
 pub const MAX_CHUNK_PAYLOAD_LEN: usize = NOISE_MAX_PLAINTEXT_LEN - CHUNK_HEADER_LEN;
 
-/// Cap on a reassembled message. Without it a peer can stream chunks forever
-/// and exhaust the agent's memory before any application-level check runs.
+/// Cap on a reassembled message. This bounds *memory*, and only memory: a chunk
+/// whose body is empty adds nothing to the total, so the byte cap alone would
+/// never be reached by a peer that streams empty continuation chunks. The chunk
+/// ceiling and the empty-continuation rejection in [`crate::noise::NoiseSession`]
+/// are what bound the time a single message may occupy a session thread.
 pub const DEFAULT_MAX_MESSAGE_LEN: usize = 4 * 1024 * 1024;
 
 pub(crate) const FLAG_FINAL: u8 = 0x00;

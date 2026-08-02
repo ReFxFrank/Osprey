@@ -112,11 +112,27 @@ pub fn verify_cross_signature(
     noise_static_pub: &[u8; 32],
     signature: &[u8; 64],
 ) -> Result<()> {
+    verify_identity_signature(
+        identity_pub,
+        &cross_sig_message(identity_pub, noise_static_pub),
+        signature,
+    )
+}
+
+/// Verify an arbitrary domain-separated message under a peer's identity key.
+///
+/// Callers supply their own domain separator; every message this key signs must
+/// carry one, or a signature captured from one context is replayable in another.
+pub fn verify_identity_signature(
+    identity_pub: &[u8; 32],
+    message: &[u8],
+    signature: &[u8; 64],
+) -> Result<()> {
     let vk = VerifyingKey::from_bytes(identity_pub)
         .map_err(|_| Error::CrossSignature(CrossSignatureFailure::BadIdentityKey))?;
     let sig = Signature::from_slice(signature)
         .map_err(|_| Error::CrossSignature(CrossSignatureFailure::Malformed))?;
-    vk.verify(&cross_sig_message(identity_pub, noise_static_pub), &sig)
+    vk.verify(message, &sig)
         .map_err(|_| Error::CrossSignature(CrossSignatureFailure::NotSignedByIdentity))
 }
 
@@ -125,12 +141,20 @@ pub fn verify_cross_signature(
 /// The pinned Ed25519 key is permanent; the peer's Noise static may be rotated
 /// and is re-accepted through [`Self::accept_static`], which is the *only*
 /// sanctioned way to learn a peer static after pairing.
+///
+/// The cross-signature is carried alongside the two keys rather than discarded
+/// once checked. A pin is persisted and re-loaded, and without the signature the
+/// "this static was vouched for by this identity" invariant would hold only for
+/// as long as nothing edits the store — a file-permission property, not a
+/// cryptographic one. [`Self::verify`] restores it on every load.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PinnedPeer {
     #[serde(with = "crate::hex32")]
     pub identity_pub: [u8; 32],
     #[serde(with = "crate::hex32")]
     pub noise_static_pub: [u8; 32],
+    #[serde(with = "crate::hex64")]
+    pub noise_static_sig: [u8; 64],
 }
 
 impl PinnedPeer {
@@ -140,7 +164,18 @@ impl PinnedPeer {
         Ok(Self {
             identity_pub: public.identity_pub,
             noise_static_pub: public.noise_static_pub,
+            noise_static_sig: public.noise_static_sig,
         })
+    }
+
+    /// Re-check that this pin's Noise static is still the one its identity key
+    /// signed. Every path that reconstitutes a pin from storage must call this.
+    pub fn verify(&self) -> Result<()> {
+        verify_cross_signature(
+            &self.identity_pub,
+            &self.noise_static_pub,
+            &self.noise_static_sig,
+        )
     }
 
     pub fn fingerprint(&self) -> Fingerprint {
@@ -162,6 +197,7 @@ impl PinnedPeer {
             &public.noise_static_sig,
         )?;
         self.noise_static_pub = public.noise_static_pub;
+        self.noise_static_sig = public.noise_static_sig;
         Ok(())
     }
 

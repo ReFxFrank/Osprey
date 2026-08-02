@@ -45,15 +45,6 @@ export function createAuditRepo(db: Db) {
   return {
     record: (accountId: string, entry: AuditEntry): Promise<void> =>
       withTenant(db, accountId, (tx) => insertAudit(accountId, tx, entry)),
-
-    list: (accountId: string, limit = 100) =>
-      withTenant(db, accountId, (tx) =>
-        tx.query.auditRelay.findMany({
-          where: (t, { eq }) => eq(t.accountId, accountId),
-          orderBy: (t, { desc }) => desc(t.createdAt),
-          limit,
-        }),
-      ),
   };
 }
 

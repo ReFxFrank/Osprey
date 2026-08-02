@@ -733,3 +733,86 @@ Write the report to `artifacts/gate-P<n>.md` as well as emitting it. Gate eviden
 ---
 
 *Brief version 1.1. Amend at gates as reality requires — and record amendments in this file rather than silently diverging.*
+
+---
+
+## 16. Amendment Log
+
+Brief line 735 requires amendments be recorded here rather than silently diverged from. Each entry states what changed, why, and who approved it.
+
+### A1 — Product name resolved (closes `TODO(frank)` #1)
+**The product is `Osprey`.** Approved by the owner, 2026-08-02. Throughout this document, "TETHER" should be read as "Osprey". Concretely: crates are `osprey-core`, `osprey-proto`, `osprey-svc`, `osprey-helper`, `osprey-secure`; the Windows data directory is `%ProgramData%\Osprey\`; the iOS app is "Osprey".
+
+### A2 — Bundle identifier (closes the P0-blocking half of `TODO(frank)` #4)
+Owner delegated naming authority. Bundle identifier is **`com.refx.osprey`**. This must be registered as an App ID in the Apple Developer portal before a provisioning profile can be issued. The APNs `.p8` key ID half of TODO #4 remains **open** and is genuinely P8, not P0.
+
+Note carried forward: renaming the bundle ID later invalidates Keychain access groups and therefore forces re-pairing of every device. It is cheap now and expensive after first pairing.
+
+### A3 — Node pin raised 22 → 24
+§1 and §4.2 pinned Node 22. Node 22 entered *Maintenance* LTS on 2025-10-21; **Node 24 is the current Active LTS** (EOL 2028-04-30). Owner approved the bump. Postgres 16 is **retained** (supported to ~Nov 2028; nothing in the relay needs newer).
+
+### A4 — Noise statics: the mandated key types cannot key a Noise handshake as written
+§6.2 line 241 specifies "Noise IK handshake … keyed on pinned static keys" while §6.1 lines 233–234 mandate Ed25519 on the agent and P-256 Secure Enclave on iOS. This is not implementable: Ed25519 is a *signature* algorithm, not a DH function; Noise requires both parties on the *same* DH function; and a Secure Enclave key can never be a `snow` static because the Enclave never exports a private key while `snow` requires raw key bytes.
+
+**Amendment.** Each device keeps its mandated hardware identity key (Ed25519/DPAPI on the agent, P-256/Secure Enclave on the phone) as the **pinned root of trust**, and *additionally* holds a software **X25519 "Noise static"** which the identity key **cross-signs** at generation. Noise runs on standard 25519 on both ends. A peer accepts an X25519 static only if its cross-signature verifies under the pinned identity key. The X25519 static is rotatable by re-signing.
+
+This does **not** reopen the §14 decision "P-256 on iOS, Ed25519 on the agent" — that decision governs which *hardware identity* curve each side uses, and it is preserved verbatim. §6.2 simply never specified the Noise DH curve; this closes that gap.
+
+*Verified empirically before adoption — see `artifacts/P0-plan-evidence/`.*
+
+### A5 — QR pairing hardened against a compromised relay
+As written, §6.1's flow lets a fully compromised relay (which §6.2 says we must assume) hijack pairing: it sees the one-time token and brokers the phone's posted pubkey, so it can redeem the token as itself or substitute its own key, and the agent has no relay-independent way to tell. Plain Noise IK does not help, because the agent's static is public — it is printed in the QR.
+
+**Amendment.** The QR carries a **`pairing_secret`** (≥256 bits, CSPRNG) that the relay **never sees**. Rendezvous uses **`routing_id = SHA-256(pairing_secret)`** — the only value the relay stores or receives. Authentication uses `pairing_secret` as the **Noise PSK**: pairing runs `Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s`. Only the physical scanner of the QR can complete the handshake, so "physical access is required to enroll" becomes a cryptographic property rather than a UX convention. Sessions *after* pairing run plain `Noise_IK` on the pinned statics, since the pin is then the authentication.
+
+The QR payload becomes `{relay_url, account_id, device_id, agent_identity_pubkey, lan_hints, pairing_secret}`. The old `one_time_token` is replaced by `routing_id`.
+
+### A6 — QR gains `lan_hints`; mDNS pulled into P0
+Gate P0 requires an authenticated ping/pong "over the local network," but the QR payload carried no address and mDNS (§3.1 step 1) was not in the P0 build list — the phone had no way to find the agent. **Amendment:** the QR carries `lan_hints` (the agent's private IPv4/IPv6 addresses and listener port), valid by construction because the phone is physically present at pairing; and minimal mDNS (`_osprey._tcp`) is pulled forward into P0 as the durable discovery path.
+
+### A7 — "Outbound connections only" clarified as WAN-scoped
+§6.2 line 243 reads "Agent makes outbound connections only," which contradicts the direct-LAN path (§3.1 step 1) and the P0 gate, both of which require the agent to accept a LAN connection. The intent was clearly WAN-scoped. **Amendment:** the agent MAY listen on private/link-local interfaces for the direct-LAN path, bound to RFC1918/link-local addresses and registered with the Windows Firewall *Private* profile only, never WAN-reachable. Outbound-only governs all relay and WAN traversal.
+
+### A8 — P0's pairing entry point is a console binary
+§6.1 starts pairing from the agent tray menu, but the tray lives in `osprey-helper` and the Windows service — both **P1**. **Amendment:** in P0, pairing is driven by console subcommands (`osprey-svc pair | run | unpair`), with the QR rendered as Unicode half-blocks in the terminal. All pairing logic lives in `osprey-core`, so the P1 tray menu is a thin caller rather than a rewrite. Physical access is still required (you must run a command at the host), so §6.1's safety property is preserved.
+
+### A9 — `proto/messages.toml` gains a Pairing group and an `error` type
+§5.1 line 190 promises every request maps to one response "or an `error`," but `error` is absent from the §5.2 registry, and there is no pairing/enrollment group at all despite P0 shipping pairing end to end. **Amendment:** §5.2 gains an `error` type (`code`, `message`, `retryable`) and a **Pairing** group (`pair.request`, `pair.confirm`, `pair.revoke`). `hello`/`hello.ok` carry a protocol version and capability set, so the P10 "zero new protocol messages" gate is achievable. The remaining registry entries stay name-only stubs until their phase.
+
+### A10 — The P0 relay endpoint surface is enumerated
+Gate P0 requires "every endpoint" return 404 on foreign resources but the brief never listed the endpoints. **Amendment — the P0 surface is these 8:** `POST /v1/agents/enroll`, `POST /v1/pairing/tokens`, `POST /v1/pairing/redeem`, `GET /v1/devices`, `DELETE /v1/pairings/:id`, `DELETE /v1/devices/:id`, `WS /v1/agent`, `WS /v1/client`. TURN minting (P5), push-token registration (P8), and SDP exchange (P5) are explicitly **not** P0. The cross-tenant suite enumerates the route table programmatically, so a new route without a tenancy test fails CI.
+
+### A11 — Schema shape fixed: the phone is a device
+§4.2's table list never said whether a phone is a `device`, yet `push_tokens` must reference it. **Amendment (table list unchanged):** `devices` carries a `kind` column (`'agent' | 'client'`); `pairings` is the join (`agent_device_id`, `client_device_id`, both pinned pubkeys and cross-signatures, `created_at`, `revoked_at`). Unpair is a soft revoke, preserving audit history.
+
+`pairing_tokens` additionally must: store only `routing_id`, never the secret; carry `account_id` + `device_id` so a malicious relay cannot route a pairing into another tenant; and redeem **atomically** in a single transactional statement, because a read-then-write race allows two pins.
+
+### A12 — DPAPI machine scope is mandatory from the first line of code
+§6.1 specifies machine-scoped DPAPI. Because the P0 agent runs as the logged-in user while the P1 service runs as SYSTEM, using DPAPI's *default* per-user scope would silently render the keys undecryptable at the P1 boundary and force re-enrollment. **Amendment:** `CRYPTPROTECT_LOCAL_MACHINE` is required from P0. Also recorded: DPAPI is at-rest obfuscation, **not** an access-control boundary — the ACL on `%ProgramData%\Osprey\` is the actual boundary.
+
+### A13 — Account minting is gated
+§0.1 creates an account implicitly on first agent enrollment. Because all quotas are **per-account**, they are structurally incapable of bounding account *creation* — an attacker hitting `/enroll` mints unlimited accounts. **Amendment:** enrollment requires a deploy-time **enrollment secret** in relay config, plus a **global** (not per-account) per-IP rate limit on `/enroll`. This does not conflict with §6.6: that constraint governs enrolling a *controller* (a phone), whereas enrolling an *agent* is a distinct act gated by whoever operates the relay. Public release later replaces the shared secret with per-tenant invite tokens.
+
+### A14 — Row-level security must use a non-owner role to be real
+§6.7 mandates RLS as defence in depth. Postgres RLS filters **nothing** for a superuser, a `BYPASSRLS` role, or the table owner — so a relay connecting as its migration role would ship inert policies that merely look protective. **Amendment:** the relay connects as a dedicated **non-owner** role, and each request sets a transaction-local `SET LOCAL app.account_id` (never plain `SET`, which leaks across pooled connections) with policies referencing `current_setting('app.account_id', true)`. Repo-layer `accountId` filtering remains the **primary** mechanism.
+
+### A15 — Noise roles fixed: the phone initiates
+Noise IK requires the initiator to know the responder's static in advance, and only the QR conveys it. **Amendment:** the phone is always the IK **initiator** and the agent the **responder**.
+
+### A16 — The audit log must record pairing and unpair
+§6.4's audited-event list omits **successful pairing** and **unpair**, despite pairing a new controller being the highest-privilege event in the system — it grants a device full control of the machine. **Amendment:** §6.4 gains pairing success (with the pinned peer key fingerprint, device id, account id, timestamp), pairing failure (PSK mismatch, expired or replayed token, signature failure), and unpair (which peer, which side initiated). The Gate P0 "tampered byte → clean logged failure" criterion is satisfied by one of these audit entries. The agent also displays the newly pinned key fingerprint so a human can catch an unexpected pin.
+
+### A17 — Gate P0 gains a hostile-relay criterion
+Gate P0 tested only the happy path, even though "the relay is untrusted" is the entire justification for the architecture, and the hostile-relay/replayed-token threat was not exercised until P9. **Amendment — added to Gate P0:** against a *deliberately malicious relay build*, verify that (a) substituting the posted phone key, (b) the relay redeeming the `routing_id` itself, and (c) replaying a used or expired token each cause pairing to **fail closed**, never a silent successful pin.
+
+### A18 — Unpair enforcement is local and authoritative
+§6.1 says revocation is immediate, but named no enforcement point — and the relay is both untrusted and entirely off-path for a LAN session. **Amendment:** the agent's local pin store is authoritative. Unpair removes the pin and tears down any live session immediately, *then* best-effort notifies the relay. The relay can neither forge nor suppress a revocation. A phone-initiated unpair sends a signed `pair.revoke` over the authenticated Noise channel; if the phone cannot reach the agent, the operator removes the pin at the host, consistent with the physical-access property.
+
+### A19 — Hardware and iOS build path resolved
+Owner confirmed available hardware, 2026-08-02: a **Windows PC**, a **physical iPhone**, and a **cloud Mac** available on demand. This makes the full Gate P0 criteria reachable; no gate criterion needs to be redefined or waived for lack of hardware.
+
+One constraint follows from the cloud Mac and must shape the iOS workflow: cloud Mac providers generally do **not** support USB device passthrough, so Xcode's "Run on device" over a cable is unavailable. Builds therefore reach the physical iPhone over the air — cloud Mac builds and signs, uploads to **TestFlight** (internal testers require no review), and the device installs from there.
+
+This is not merely a convenience issue. Gate P0 requires the phone to scan a QR code and use a Secure-Enclave-backed key, and **neither the camera nor the Secure Enclave exists in the iOS Simulator** — Apple DTS states the Simulator "acts like an iOS device that has no SE." So every P0 iOS gate step must run on the physical device, reached via TestFlight.
+
+Sequencing consequence: iOS work is batched rather than iterative. The Rust XCFramework build (UniFFI-wrapped `snow`), the Xcode project, and the pairing UI should be assembled and then exercised in a focused cloud-Mac session, rather than spread across many short sessions with a slow build-to-device loop.

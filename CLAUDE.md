@@ -1,6 +1,6 @@
-# TETHER — Claude Code Operating Context
+# Osprey — Claude Code Operating Context
 
-You are the implementing engineer on TETHER. The full specification is **`docs/TETHER-build-brief.md`** — read it before your first action in any session. This file holds only the rules that must survive context compaction.
+You are the implementing engineer on Osprey (codenamed TETHER in early drafts). The full specification is **`docs/osprey-build-brief.md`** — read it before your first action in any session. This file holds only the rules that must survive context compaction.
 
 ---
 
@@ -20,7 +20,7 @@ You are the implementing engineer on TETHER. The full specification is **`docs/T
 
 Violating any of these is an architectural defect, not a style issue.
 
-- **Session 0 isolation.** `tether-svc` is a SYSTEM service with no desktop. It may never call `SendInput`, `IDXGIOutputDuplication`, or any windowing API. All visual and input work happens in `tether-helper` (user session) or `tether-secure` (Winlogon desktop, P7).
+- **Session 0 isolation.** `osprey-svc` is a SYSTEM service with no desktop. It may never call `SendInput`, `IDXGIOutputDuplication`, or any windowing API. All visual and input work happens in `osprey-helper` (user session) or `osprey-secure` (Winlogon desktop, P7).
 - **The relay is untrusted.** Assume the VPS is fully compromised; the design must still hold. Plaintext never reaches it. WebRTC fingerprints are exchanged inside the already-encrypted Noise channel.
 - **Every relay table is tenant-scoped.** No query anywhere is global. Route handlers never touch `db` — everything goes through `relay/src/repo/`, whose every function takes `accountId` as its first parameter. This is lint-enforced.
 - **Two data channels, different guarantees.** `input.mouse`/`input.scroll` go unreliable + unordered (`maxRetransmits: 0`). Keys and clicks go reliable + ordered. Never merge them.
@@ -78,10 +78,15 @@ Optional everywhere else; mandatory here:
 ```bash
 # Agent
 cd agent && cargo build --workspace
-cd agent && cargo clippy --workspace -- -D warnings
+cd agent && cargo clippy --workspace --all-targets -- -D warnings
 cd agent && cargo test --workspace
 
-# Relay
+# Windows is the target platform, so type-check it even when developing on
+# Linux/macOS. `check`-based commands need no MSVC linker, and this has already
+# caught a break that was invisible on a Linux-only run.
+cd agent && cargo clippy --workspace --all-targets --target x86_64-pc-windows-msvc -- -D warnings
+
+# Relay — requires Node >= 24 and a reachable Postgres
 cd relay && pnpm install && pnpm dev
 cd relay && pnpm drizzle-kit generate && pnpm drizzle-kit migrate
 cd relay && pnpm test
@@ -90,15 +95,15 @@ cd relay && pnpm test
 cd proto && pnpm generate
 
 # iOS
-open ios/Tether/Tether.xcodeproj
+open ios/Osprey/Osprey.xcodeproj
 ```
 
 Service install/uninstall requires an elevated PowerShell:
 
 ```powershell
-.\target\debug\tether-svc.exe install
-.\target\debug\tether-svc.exe uninstall
-Get-Service Tether
+.\target\debug\osprey-svc.exe install
+.\target\debug\osprey-svc.exe uninstall
+Get-Service Osprey
 ```
 
 ---

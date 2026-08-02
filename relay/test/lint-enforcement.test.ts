@@ -1,5 +1,5 @@
-import { rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { ESLint } from 'eslint';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -12,6 +12,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
  */
 describe('repository boundary lint', () => {
   const probeDir = join(process.cwd(), 'src', 'routes');
+  const nestedProbeDir = join(probeDir, '__probe_nested');
   const written: string[] = [];
   let eslint: ESLint;
 
@@ -21,11 +22,13 @@ describe('repository boundary lint', () => {
 
   afterAll(async () => {
     await Promise.all(written.map((f) => rm(f, { force: true })));
+    await rm(nestedProbeDir, { force: true, recursive: true });
   });
 
-  async function lintProbe(name: string, source: string) {
-    const file = join(probeDir, name);
+  async function lintProbe(relativePath: string, source: string) {
+    const file = join(probeDir, relativePath);
     written.push(file);
+    await mkdir(dirname(file), { recursive: true });
     await writeFile(file, source, 'utf8');
     const [result] = await eslint.lintFiles([file]);
     await rm(file, { force: true });
@@ -58,6 +61,30 @@ describe('repository boundary lint', () => {
       "import { eq } from 'drizzle-orm';\nimport postgres from 'postgres';\nexport const probe = { eq, postgres };\n",
     );
     expect(messages.some((m) => m.startsWith('no-restricted-imports'))).toBe(true);
+    expect(messages.some((m) => m.startsWith('boundaries/external'))).toBe(true);
+  });
+
+  /**
+   * The two mechanisms are documented as independent, so each must hold on its
+   * own. It did not: the boundaries elements were declared with `src/routes/*.ts`,
+   * which matches one level only, so a file in a subdirectory was classified as
+   * nothing at all and no layering rule applied to it. Mechanism 1 still caught
+   * this particular import, which is exactly why the gap was invisible.
+   */
+  it('classifies a route in a nested directory and applies the layering rule there', async () => {
+    const messages = await lintProbe(
+      '__probe_nested/leak.ts',
+      "import { withTenant } from '../../db/client.ts';\nexport const probe = withTenant;\n",
+    );
+    expect(messages.some((m) => m.startsWith('boundaries/element-types'))).toBe(true);
+    expect(messages.some((m) => m.startsWith('boundaries/no-unknown-files'))).toBe(false);
+  });
+
+  it('rejects a nested route reaching drizzle-orm directly', async () => {
+    const messages = await lintProbe(
+      '__probe_nested/external.ts',
+      "import { eq } from 'drizzle-orm';\nexport const probe = eq;\n",
+    );
     expect(messages.some((m) => m.startsWith('boundaries/external'))).toBe(true);
   });
 

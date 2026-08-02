@@ -91,6 +91,15 @@ pub enum Error {
     #[error("peer sent an empty chunk, which carries no continuation flag")]
     EmptyChunk,
 
+    /// A non-final chunk with no body advances reassembly by zero bytes, so a
+    /// stream of them never approaches the byte cap. Refusing it outright is
+    /// what stops a peer holding a session thread open indefinitely.
+    #[error("peer sent a non-final chunk with an empty body, which cannot advance reassembly")]
+    EmptyContinuationChunk,
+
+    #[error("reassembly of one message exceeded the {max}-chunk ceiling")]
+    TooManyChunks { max: usize },
+
     #[error("connection closed mid-frame after {got} of {want} bytes")]
     TruncatedFrame { got: usize, want: usize },
 

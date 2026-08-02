@@ -2,17 +2,19 @@
 
 use std::io::Write;
 use std::net::{SocketAddr, TcpStream};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use osprey_core::channel;
-use osprey_core::identity::DeviceIdentity;
+use osprey_core::identity::{DeviceIdentity, PinnedPeer};
 
 use crate::host::Host;
 use crate::lan::{LanListener, DEFAULT_LAN_PORT};
-use crate::registry::{spawn_revocation_watcher, SessionRegistry};
+use crate::registry::{spawn_revocation_watcher, SessionRegistry, REVOCATION_POLL_INTERVAL};
+use crate::revoke::RevocationHandler;
 use crate::session::{self, SessionConfig};
 use crate::state::HostState;
 
@@ -69,6 +71,13 @@ pub fn execute(
         device_id: host.state.device_id(),
         software_version: env!("CARGO_PKG_VERSION").to_owned(),
     };
+    let revocation = RevocationHandler::new(
+        &host.layout.state,
+        &host.audit,
+        &registry,
+        host.state.device_id(),
+        host.pairing_context(),
+    );
 
     // Scoped threads so each session can borrow the identity and the registry
     // without an `Arc` per connection, and so the scope's join is the single
@@ -89,11 +98,20 @@ pub fn execute(
                 }
             };
             let identity = &host.identity;
+            let state_path = &host.layout.state;
+            let revocation = &revocation;
             let registry = Arc::clone(&registry);
             let config = config.clone();
             scope.spawn(move || {
-                if let Err(err) = serve_one(identity, &pins, &registry, stream, peer_addr, &config)
-                {
+                let session = Session {
+                    identity,
+                    pins: &pins,
+                    registry: &registry,
+                    state_path,
+                    config: &config,
+                    revocation,
+                };
+                if let Err(err) = serve_one(&session, stream, peer_addr) {
                     tracing::warn!(%peer_addr, error = %err, "session ended with an error");
                 }
             });
@@ -116,14 +134,18 @@ pub fn execute(
     result
 }
 
-fn serve_one(
-    identity: &DeviceIdentity,
-    pins: &[osprey_core::identity::PinnedPeer],
-    registry: &Arc<SessionRegistry>,
-    mut stream: TcpStream,
-    peer_addr: SocketAddr,
-    config: &SessionConfig,
-) -> Result<()> {
+/// What one session thread borrows from `execute` for its whole life.
+struct Session<'a> {
+    identity: &'a DeviceIdentity,
+    /// The pin list as it stood when the socket was accepted.
+    pins: &'a [PinnedPeer],
+    registry: &'a Arc<SessionRegistry>,
+    state_path: &'a Path,
+    config: &'a SessionConfig,
+    revocation: &'a RevocationHandler<'a>,
+}
+
+fn serve_one(session: &Session<'_>, mut stream: TcpStream, peer_addr: SocketAddr) -> Result<()> {
     stream
         .set_read_timeout(Some(SESSION_IDLE_TIMEOUT))
         .context("could not set a session read timeout")?;
@@ -131,19 +153,42 @@ fn serve_one(
     // `accept` refuses any peer whose static is not pinned. That check is the
     // unpair enforcement point: nothing about it involves the relay, so a
     // revoked controller is refused even on a LAN the relay cannot see.
-    let (peer, mut session) = channel::accept(&mut stream, identity, pins)
+    let (peer, mut noise) = channel::accept(&mut stream, session.identity, session.pins)
         .with_context(|| format!("refused a session from {peer_addr}"))?;
     let fingerprint = peer.fingerprint();
-    tracing::info!(%peer_addr, fingerprint = %fingerprint.short(), "session established");
 
-    // Registered before the first application byte, so an unpair that lands
-    // one instruction later still finds a socket to shut down.
+    // Registered before the pin is re-checked, not after. `pins` was read before
+    // the handshake, and a handshake takes milliseconds — long enough for an
+    // `unpair` in another process to have completed against a list this thread
+    // is still holding. Registering first means the revocation watcher can
+    // already see this socket, so the re-read below and the watcher between them
+    // leave no interval in which a revoked peer is both admitted and invisible.
+    // The residual is bounded by REVOCATION_POLL_INTERVAL and nothing longer.
     let shutdown_handle = stream
         .try_clone()
         .context("could not duplicate the session socket for revocation")?;
-    let _live = registry.register(peer.identity_pub, shutdown_handle);
+    let _live = session
+        .registry
+        .register(peer.identity_pub, shutdown_handle);
 
-    let report = session::serve(&mut session, &mut stream, config)?;
+    let current = HostState::read_peers(session.state_path)
+        .with_context(|| format!("could not re-check the pin store for {peer_addr}"))?;
+    if !current.iter().any(|p| p.pinned == *peer) {
+        anyhow::bail!(
+            "{peer_addr} was unpaired during its handshake; refusing (watcher poll interval \
+             is {} ms, which this check makes irrelevant here)",
+            REVOCATION_POLL_INTERVAL.as_millis()
+        );
+    }
+    tracing::info!(%peer_addr, fingerprint = %fingerprint.short(), "session established");
+
+    let report = session::serve(
+        &mut noise,
+        &mut stream,
+        session.config,
+        peer,
+        session.revocation,
+    )?;
     tracing::info!(
         %peer_addr,
         fingerprint = %fingerprint.short(),

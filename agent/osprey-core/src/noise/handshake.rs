@@ -135,10 +135,6 @@ impl Handshake {
         Ok(buf)
     }
 
-    pub fn is_finished(&self) -> bool {
-        self.state.is_handshake_finished()
-    }
-
     /// Promote to transport mode, capturing the peer's authenticated static key.
     pub fn into_session(self) -> Result<NoiseSession> {
         let remote = self

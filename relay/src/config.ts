@@ -12,6 +12,17 @@ export interface RelayConfig {
   readonly enrollmentSecret: string;
   /** Global (not per-account) enrollment attempts allowed per source IP per hour. */
   readonly enrollRateLimitPerHour: number;
+  /**
+   * Redeem attempts allowed per source IP, and failed redeem attempts allowed
+   * per target account, inside a one-minute window. `POST /v1/pairing/redeem`
+   * is unauthenticated and names its tenant in the body, so without this an
+   * anonymous caller can drive unbounded per-tenant database work.
+   *
+   * The window is a minute rather than an hour because the per-account half is
+   * reachable by a third party: a flood against one tenant costs that tenant a
+   * minute of pairing availability, not an hour.
+   */
+  readonly redeemRateLimitPerMinute: number;
   readonly pairingTokenTtlSeconds: number;
   readonly defaultMaxDevices: number;
   readonly defaultMaxPairingAttemptsPerHour: number;
@@ -52,6 +63,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RelayConfig {
     databaseUrl: required(env, 'DATABASE_URL'),
     enrollmentSecret,
     enrollRateLimitPerHour: intWithDefault(env, 'OSPREY_ENROLL_RATE_LIMIT_PER_HOUR', 10),
+    redeemRateLimitPerMinute: intWithDefault(env, 'OSPREY_REDEEM_RATE_LIMIT_PER_MINUTE', 20),
     // Brief §6.1 fixes the QR validity window at 120 seconds.
     pairingTokenTtlSeconds: intWithDefault(env, 'OSPREY_PAIRING_TOKEN_TTL_SECONDS', 120),
     defaultMaxDevices: intWithDefault(env, 'OSPREY_DEFAULT_MAX_DEVICES', 25),

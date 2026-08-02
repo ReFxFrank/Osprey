@@ -21,7 +21,11 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Bumped on any layout change; a mismatch is a hard error, never a lossy parse.
-pub const STATE_VERSION: u32 = 1;
+///
+/// Version 2 added the pin's cross-signature and the consumed-revocation list.
+/// A version 1 file has no signature to re-verify, so it is rejected rather than
+/// upgraded — the whole point of the field is that it cannot be assumed.
+pub const STATE_VERSION: u32 = 2;
 
 /// Keystore label under which the relay device token is sealed.
 pub const RELAY_TOKEN_LABEL: &str = "relay-device-token";
@@ -54,6 +58,19 @@ pub struct RelayEnrolment {
     pub device_id: Uuid,
 }
 
+/// A `pair.revoke` this agent has already acted on.
+///
+/// Retained only for as long as a replay could still pass the freshness check —
+/// beyond [`REVOKE_CLOCK_WINDOW`] a replayed revocation is refused on its
+/// `issued_at` alone, so keeping the nonce any longer would grow the file
+/// without buying a property.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConsumedRevocation {
+    /// Lowercase hex of the 32 nonce bytes.
+    pub nonce: String,
+    pub issued_at_ms: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StateFile {
     version: u32,
@@ -65,6 +82,8 @@ struct StateFile {
     relay: Option<RelayEnrolment>,
     #[serde(default)]
     peers: Vec<PairedPeer>,
+    #[serde(default)]
+    consumed_revocations: Vec<ConsumedRevocation>,
 }
 
 /// How the operator named a peer on the command line.
@@ -137,21 +156,53 @@ pub struct HostState {
     file: StateFile,
 }
 
+/// Parse and validate a state file's bytes.
+///
+/// Re-verifying every pin's cross-signature here is what makes "this Noise
+/// static was vouched for by this identity key" a cryptographic invariant rather
+/// than a procedural one. It is established at pin time, but a pin outlives the
+/// process that made it, and nothing else on the load path would notice a
+/// substituted `noise_static_pub` — which is exactly the value that decides
+/// which key may open a session.
+fn parse_state(path: &Path, bytes: &[u8]) -> Result<StateFile> {
+    let file: StateFile = serde_json::from_slice(bytes)
+        .with_context(|| format!("{} is not valid Osprey state", path.display()))?;
+    if file.version != STATE_VERSION {
+        return Err(anyhow!(
+            "{} is schema version {}, this build writes version {STATE_VERSION}",
+            path.display(),
+            file.version
+        ));
+    }
+    for peer in &file.peers {
+        peer.pinned.verify().with_context(|| {
+            format!(
+                "{} holds a pin for {} whose noise static is not signed by its identity key; \
+                 the pin store has been tampered with",
+                path.display(),
+                peer.fingerprint().short()
+            )
+        })?;
+    }
+    Ok(file)
+}
+
 impl HostState {
+    /// Load an existing state file. Fails if the agent has never been started.
+    pub fn load(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref().to_path_buf();
+        let bytes =
+            fs::read(&path).with_context(|| format!("could not read {}", path.display()))?;
+        let file = parse_state(&path, &bytes)?;
+        Ok(Self { path, file })
+    }
+
     /// Load the state file, creating one with a fresh device id on first run.
     pub fn load_or_create(path: impl AsRef<Path>, display_name: &str) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
         match fs::read(&path) {
             Ok(bytes) => {
-                let file: StateFile = serde_json::from_slice(&bytes)
-                    .with_context(|| format!("{} is not valid Osprey state", path.display()))?;
-                if file.version != STATE_VERSION {
-                    return Err(anyhow!(
-                        "{} is schema version {}, this build writes version {STATE_VERSION}",
-                        path.display(),
-                        file.version
-                    ));
-                }
+                let file = parse_state(&path, &bytes)?;
                 Ok(Self { path, file })
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
@@ -163,6 +214,7 @@ impl HostState {
                         display_name: display_name.to_owned(),
                         relay: None,
                         peers: Vec::new(),
+                        consumed_revocations: Vec::new(),
                     },
                 };
                 state.save()?;
@@ -180,11 +232,7 @@ impl HostState {
     pub fn read_peers(path: impl AsRef<Path>) -> Result<Vec<PairedPeer>> {
         let path = path.as_ref();
         match fs::read(path) {
-            Ok(bytes) => {
-                let file: StateFile = serde_json::from_slice(&bytes)
-                    .with_context(|| format!("{} is not valid Osprey state", path.display()))?;
-                Ok(file.peers)
-            }
+            Ok(bytes) => Ok(parse_state(path, &bytes)?.peers),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
             Err(err) => Err(err).with_context(|| format!("could not read {}", path.display())),
         }
@@ -229,6 +277,43 @@ impl HostState {
             .retain(|existing| existing.pinned.identity_pub != peer.pinned.identity_pub);
         self.file.peers.push(peer);
         self.save()
+    }
+
+    /// Record a `pair.revoke` nonce, reporting whether it is new.
+    ///
+    /// `Ok(false)` means the nonce has been seen before and the caller must
+    /// refuse the revocation. Entries that can no longer pass the freshness
+    /// check are pruned in the same write, which is what keeps this list bounded
+    /// without an arbitrary cap: a valid revocation costs the peer its pin, so
+    /// at most one nonce per pinned peer can be added per window.
+    pub fn consume_revocation_nonce(
+        &mut self,
+        nonce: &[u8],
+        issued_at_ms: i64,
+        now_ms: i64,
+        window_ms: i64,
+    ) -> Result<bool> {
+        let encoded = hex::encode(nonce);
+        if self
+            .file
+            .consumed_revocations
+            .iter()
+            .any(|seen| seen.nonce == encoded)
+        {
+            return Ok(false);
+        }
+        // The receiver's clock only moves forward, so once `now` has passed
+        // `issued_at + window` no replay of that nonce can satisfy freshness
+        // again and the entry has nothing left to protect.
+        self.file
+            .consumed_revocations
+            .retain(|seen| now_ms.saturating_sub(seen.issued_at_ms) <= window_ms);
+        self.file.consumed_revocations.push(ConsumedRevocation {
+            nonce: encoded,
+            issued_at_ms,
+        });
+        self.save()?;
+        Ok(true)
     }
 
     /// Remove every peer matching `selector`, returning what was removed.
@@ -284,12 +369,13 @@ mod tests {
     use super::*;
     use osprey_core::identity::DeviceIdentity;
 
-    fn peer(seed: u8) -> PairedPeer {
-        let identity = DeviceIdentity::generate();
-        let mut pinned = PinnedPeer::pin(identity.public()).expect("pin");
-        pinned.identity_pub[0] = seed;
+    /// A pin from a real identity. Distinctness comes from the generated key, not
+    /// from an edited byte: since the pin now re-verifies its own
+    /// cross-signature, a hand-mutated key would be rejected on the next load —
+    /// which is the property `a_tampered_pin_store_is_refused` asserts.
+    fn peer() -> PairedPeer {
         PairedPeer {
-            pinned,
+            pinned: PinnedPeer::pin(DeviceIdentity::generate().public()).expect("pin"),
             relay_device_id: None,
             paired_at_ms: 0,
         }
@@ -317,7 +403,7 @@ mod tests {
         let path = dir.path().join("state.json");
         let mut state = HostState::load_or_create(&path, "host").expect("create");
         let device_id = state.device_id();
-        state.add_peer(peer(1)).expect("add");
+        state.add_peer(peer()).expect("add");
 
         let reloaded = HostState::load_or_create(&path, "ignored").expect("reload");
         assert_eq!(reloaded.device_id(), device_id);
@@ -330,8 +416,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("state.json");
         let mut state = HostState::load_or_create(&path, "host").expect("create");
-        let keep = peer(1);
-        let drop = peer(2);
+        let keep = peer();
+        let drop = peer();
         state.add_peer(keep.clone()).expect("add");
         state.add_peer(drop.clone()).expect("add");
 
@@ -347,11 +433,86 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("state.json");
         let mut state = HostState::load_or_create(&path, "host").expect("create");
-        let first = peer(7);
-        let mut second = first.clone();
-        second.pinned.noise_static_pub = [9u8; 32];
+
+        // A rotated static under the same identity key: the case that must
+        // replace the record rather than add a second one.
+        let mut controller = DeviceIdentity::generate();
+        let first = PairedPeer {
+            pinned: PinnedPeer::pin(controller.public()).expect("pin"),
+            relay_device_id: None,
+            paired_at_ms: 0,
+        };
+        controller.rotate_noise_static();
+        let mut rotated = first.pinned.clone();
+        rotated
+            .accept_static(controller.public())
+            .expect("rotation signed by the pinned identity");
+        let second = PairedPeer {
+            pinned: rotated,
+            relay_device_id: None,
+            paired_at_ms: 1,
+        };
+
         state.add_peer(first).expect("add");
         state.add_peer(second.clone()).expect("re-add");
         assert_eq!(state.peers(), &[second]);
+        assert_eq!(HostState::read_peers(&path).expect("read").len(), 1);
+    }
+
+    #[test]
+    fn a_tampered_pin_store_is_refused_rather_than_loaded() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("state.json");
+        let mut state = HostState::load_or_create(&path, "host").expect("create");
+        state.add_peer(peer()).expect("add");
+
+        // Swap the pinned session key for one the attacker holds, leaving the
+        // operator's identity key and its signature untouched — the edit that
+        // file permissions alone were the only thing preventing.
+        let attacker = DeviceIdentity::generate();
+        let mut raw: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).expect("read")).expect("parse");
+        raw["peers"][0]["pinned"]["noise_static_pub"] =
+            serde_json::Value::String(hex::encode(attacker.public().noise_static_pub));
+        fs::write(&path, serde_json::to_vec(&raw).expect("encode")).expect("write");
+
+        let err = HostState::load_or_create(&path, "host").expect_err("must refuse");
+        assert!(
+            format!("{err:#}").contains("tampered with"),
+            "unexpected error: {err:#}"
+        );
+        assert!(HostState::read_peers(&path).is_err());
+    }
+
+    #[test]
+    fn a_revocation_nonce_is_accepted_once_and_pruned_when_it_can_no_longer_replay() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("state.json");
+        let mut state = HostState::load_or_create(&path, "host").expect("create");
+        let window_ms = 300_000i64;
+
+        assert!(state
+            .consume_revocation_nonce(&[1u8; 32], 1_000, 1_000, window_ms)
+            .expect("first"));
+        assert!(
+            !state
+                .consume_revocation_nonce(&[1u8; 32], 1_000, 1_000, window_ms)
+                .expect("replay"),
+            "a nonce must not be accepted twice"
+        );
+        assert!(
+            !HostState::load(&path)
+                .expect("reload")
+                .consume_revocation_nonce(&[1u8; 32], 1_000, 1_000, window_ms)
+                .expect("replay after restart"),
+            "the nonce must survive a restart, or a replay wins by killing the agent"
+        );
+
+        // Far enough past the window that no replay of the first nonce could
+        // still pass the freshness check, so it is dropped.
+        state
+            .consume_revocation_nonce(&[2u8; 32], 1_000_000, 1_000_000, window_ms)
+            .expect("second");
+        assert_eq!(state.file.consumed_revocations.len(), 1);
     }
 }

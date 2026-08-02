@@ -40,15 +40,27 @@ export function quotaDefaultsFrom(config: RelayConfig) {
 export async function buildApp(config: RelayConfig, repo: Repo): Promise<RelayApp> {
   const app = Fastify({
     logger: { level: config.logLevel },
-    // Caddy terminates TLS and is the only thing in front of the relay, so its
-    // forwarding headers are the authority on client IP — which the enrollment
-    // limiter keys on.
-    trustProxy: true,
+    /**
+     * Exactly one hop, never `true`. `trustProxy: true` makes `request.ip` the
+     * *leftmost* X-Forwarded-For entry, which is whatever the client typed —
+     * so an attacker rotating that header gets a fresh rate-limit bucket per
+     * request, and the enrollment limiter is the only structural bound on
+     * account creation (execution plan item 11). With `1`, Fastify trusts only
+     * the socket peer and takes the rightmost entry: the address Caddy itself
+     * observed and appended. Any entries the client forged sit to the left of
+     * it and are ignored.
+     *
+     * This is correct only because Caddy is the sole ingress — the relay
+     * container publishes no host port (see docker-compose.yml).
+     */
+    trustProxy: 1,
     bodyLimit: 256 * 1024,
   });
 
   const hub = new SocketHub();
   const enrollLimiter = createFixedWindowLimiter(config.enrollRateLimitPerHour, 3_600_000);
+  const redeemIpLimiter = createFixedWindowLimiter(config.redeemRateLimitPerMinute, 60_000);
+  const redeemAccountLimiter = createFixedWindowLimiter(config.redeemRateLimitPerMinute, 60_000);
 
   const routes: RouteInfo[] = [];
   app.addHook('onRoute', (routeOptions) => {
@@ -74,7 +86,7 @@ export async function buildApp(config: RelayConfig, repo: Repo): Promise<RelayAp
   app.get('/healthz', async (_request, reply) => reply.send({ status: 'ok' }));
 
   registerEnrollRoutes(app, { repo, config, enrollLimiter });
-  registerPairingRoutes(app, { repo, config });
+  registerPairingRoutes(app, { repo, config, redeemIpLimiter, redeemAccountLimiter });
   registerDeviceRoutes(app, {
     repo,
     onDeviceRevoked: (accountId, deviceId) => hub.drop(accountId, deviceId, 'device revoked'),

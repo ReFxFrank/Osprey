@@ -53,11 +53,6 @@ impl Host {
         })
     }
 
-    /// Open the agent's state at the platform data directory.
-    pub fn open_default(display_name: &str) -> Result<Self> {
-        Self::open(DataLayout::create_default()?, display_name)
-    }
-
     /// Identifiers stamped onto every audit entry.
     ///
     /// A LAN-only agent has no relay account, and the audit log says so in as

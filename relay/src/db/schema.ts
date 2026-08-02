@@ -31,6 +31,13 @@ import {
  */
 export const APP_ROLE = 'osprey_app';
 
+/**
+ * Named so `repo/pairingTokens.ts` can recognise the exact constraint it is
+ * allowed to swallow. Matching on the code alone would also swallow a future
+ * unique violation somewhere else and report it as a routing-id collision.
+ */
+export const ROUTING_ID_UNIQUE_INDEX = 'pairing_tokens_routing_id_key';
+
 const tenantPolicy = (table: string) =>
   pgPolicy(`${table}_tenant_isolation`, {
     for: 'all',
@@ -165,8 +172,10 @@ export const pairingTokens = pgTable(
   },
   (t) => [
     // Global uniqueness on the rendezvous id: two tenants must never be able to
-    // hold the same routing_id, or redemption becomes ambiguous.
-    uniqueIndex('pairing_tokens_routing_id_key').on(t.routingId),
+    // hold the same routing_id, or redemption becomes ambiguous. The cost is a
+    // constraint that can fire on a row the inserting tenant cannot see, which
+    // is why `repo/pairingTokens.ts` catches it by name.
+    uniqueIndex(ROUTING_ID_UNIQUE_INDEX).on(t.routingId),
     index('pairing_tokens_account_created_idx').on(t.accountId, t.createdAt),
     tenantPolicy('pairing_tokens'),
   ],

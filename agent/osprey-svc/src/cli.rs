@@ -51,6 +51,12 @@ pub enum Command {
         /// Seconds the QR stays valid.
         #[arg(long, default_value_t = DEFAULT_PAIRING_TTL.as_secs(), value_name = "SECONDS")]
         ttl: u64,
+
+        /// Also print the QR's decoded JSON. It contains the pairing secret, so
+        /// it persists in scrollback and in anything capturing stdout — ask for
+        /// it only when a scan is impossible.
+        #[arg(long)]
+        print_payload: bool,
     },
 
     /// Serve sessions to already-paired controllers.

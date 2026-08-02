@@ -77,15 +77,25 @@ export default tseslint.config(
     settings: {
       'boundaries/include': ['src/**/*.ts'],
       'boundaries/elements': [
-        { type: 'db', pattern: 'src/db/*.ts', mode: 'file' },
-        { type: 'repo', pattern: 'src/repo/*.ts', mode: 'file' },
-        { type: 'http', pattern: 'src/http/*.ts', mode: 'file' },
-        { type: 'ws', pattern: 'src/ws/*.ts', mode: 'file' },
-        { type: 'routes', pattern: 'src/routes/*.ts', mode: 'file' },
+        // `**` matters: with a single-level `src/routes/*.ts`, a file at
+        // `src/routes/nested/leak.ts` matched no element, so it had no type and
+        // the layering rules below never ran on it. The two mechanisms are
+        // documented as independent, and one of them silently did not cover a
+        // subdirectory.
+        { type: 'db', pattern: 'src/db/**/*.ts', mode: 'file' },
+        { type: 'repo', pattern: 'src/repo/**/*.ts', mode: 'file' },
+        { type: 'http', pattern: 'src/http/**/*.ts', mode: 'file' },
+        { type: 'ws', pattern: 'src/ws/**/*.ts', mode: 'file' },
+        { type: 'routes', pattern: 'src/routes/**/*.ts', mode: 'file' },
         { type: 'app', pattern: 'src/*.ts', mode: 'file' },
       ],
     },
     rules: {
+      // Backstop for the backstop: a new top-level directory under src/ has no
+      // element type, so it would inherit no layering rule at all. Failing on an
+      // unclassified file forces the decision to be made here rather than by
+      // omission.
+      'boundaries/no-unknown-files': 'error',
       'boundaries/element-types': [
         'error',
         {

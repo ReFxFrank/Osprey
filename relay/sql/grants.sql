@@ -16,6 +16,27 @@ TO osprey_app;
 -- own schema or rewrite migration history.
 REVOKE CREATE ON SCHEMA public FROM osprey_app;
 
--- A verification query, kept next to the grants so the invariant is testable:
---   SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = 'osprey_app';
--- must return (false, false). `test/rls.test.ts` asserts exactly this.
+-- FORCE, not merely ENABLE. `enableRLS()` in src/db/schema.ts turns policies on,
+-- but Postgres exempts a table's *owner* from its own table's policies unless
+-- FORCE is set. Without these lines the whole backstop rests on an assumption
+-- nobody states out loud — that DATABASE_URL never names the owner — and both
+-- src/db/migrate.ts and drizzle.config.ts fall back to DATABASE_URL when
+-- DATABASE_URL_MIGRATOR is absent, so the two roles are one typo apart. With
+-- FORCE, pointing the relay at the owner connection filters everything to zero
+-- rows instead of silently disclosing every tenant.
+--
+-- The consequence is deliberate: the migrator role can no longer read or write
+-- these tables' *rows*, only their structure. Migrations are DDL, and TRUNCATE
+-- is not subject to RLS, so nothing in the migration path needs row access. A
+-- future data backfill would have to run as a role holding an explicit policy.
+ALTER TABLE accounts        FORCE ROW LEVEL SECURITY;
+ALTER TABLE devices         FORCE ROW LEVEL SECURITY;
+ALTER TABLE pairings        FORCE ROW LEVEL SECURITY;
+ALTER TABLE pairing_tokens  FORCE ROW LEVEL SECURITY;
+ALTER TABLE push_tokens     FORCE ROW LEVEL SECURITY;
+ALTER TABLE quotas          FORCE ROW LEVEL SECURITY;
+ALTER TABLE audit_relay     FORCE ROW LEVEL SECURITY;
+
+-- The invariants above are not left to review. `assertRlsBackstopIsLive` in
+-- src/db/client.ts re-checks all of them on every boot and refuses to start
+-- otherwise; `test/rls.test.ts` asserts both the state and the refusal.

@@ -1,4 +1,4 @@
-import { and, eq, isNull, or, sql } from 'drizzle-orm';
+import { and, eq, isNull, or } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
 import { withTenant } from '../db/client.ts';
 import { devices, pairings } from '../db/schema.ts';
@@ -69,15 +69,6 @@ export function createDeviceRepo(db: Db) {
           createdAt: r.createdAt.toISOString(),
           lastSeenAt: r.lastSeenAt?.toISOString() ?? null,
         }));
-      }),
-
-    countActive: (accountId: string): Promise<number> =>
-      withTenant(db, accountId, async (tx) => {
-        const [row] = await tx
-          .select({ n: sql<number>`count(*)::int` })
-          .from(devices)
-          .where(and(eq(devices.accountId, accountId), isNull(devices.revokedAt)));
-        return row?.n ?? 0;
       }),
 
     /**
