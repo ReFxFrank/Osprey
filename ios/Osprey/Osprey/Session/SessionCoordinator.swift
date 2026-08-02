@@ -28,23 +28,25 @@ public struct SessionCoordinator: Sendable {
             seconds: Self.exchangeTimeout, stream: stream
         ) {
             let channel = NoiseChannel(engine: engine)
-            let framed = FramedStream(stream: stream)
 
             let first = try await channel.begin(
                 pattern: .session,
                 localStaticPrivateKey: identity.noiseStaticPrivateKey,
                 remoteStaticPublicKey: host.pinnedIdentity.noiseStaticPublicKey,
                 payload: Data())
-            try await framed.writeFrame(first)
-            guard let second = try await framed.readFrame() else {
+            // Written verbatim: the core already framed it.
+            try await stream.write(first)
+            guard
+                try await readHandshakePayload(channel: channel, stream: stream) != nil
+            else {
                 throw PairingError.hostClosedDuringHandshake
             }
-            let result = try await channel.complete(second)
+            let remoteStaticPublicKey = try await channel.promote()
 
             // IK authenticates the responder cryptographically, but the check is
             // stated rather than assumed so a future pattern change cannot
             // quietly drop it.
-            guard result.remoteStaticPublicKey == host.pinnedIdentity.noiseStaticPublicKey else {
+            guard remoteStaticPublicKey == host.pinnedIdentity.noiseStaticPublicKey else {
                 throw SessionError.hostIsNotThePinnedOne
             }
 

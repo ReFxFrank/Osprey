@@ -6,6 +6,38 @@ import Foundation
 ///
 /// Every lock is taken inside a synchronous helper: `NSLock.lock()` is
 /// `noasync`, so an `async` method must not hold one across its own body.
+///
+/// Every double that has to find a message boundary cuts frames with the Rust
+/// core's own `frameDecode`, and builds them with `frameEncode`. A double that
+/// reimplemented the length prefix would be able to agree with a Swift bug and
+/// disagree with the agent, which is precisely how the double-framing defect
+/// survived a green test suite.
+
+/// Frame reassembly over the core's decoder.
+struct FrameBuffer {
+    private var bytes = Data()
+
+    var pending: Data { bytes }
+
+    mutating func push(_ data: Data) {
+        bytes.append(data)
+    }
+
+    /// The next complete frame body, or `nil` while more bytes are needed.
+    mutating func take() throws -> Data? {
+        let scan = try frameDecode(buffer: bytes)
+        guard let frame = scan.frame else { return nil }
+        bytes = Data(bytes.dropFirst(Int(scan.consumed)))
+        return frame
+    }
+
+    /// Hand the unparsed remainder to whoever takes over the stream.
+    mutating func drain() -> Data {
+        let rest = bytes
+        bytes = Data()
+        return rest
+    }
+}
 
 /// A byte stream whose reads come from a script and whose writes are recorded.
 ///
@@ -37,8 +69,8 @@ final class ScriptedStream: ByteStream, @unchecked Sendable {
         record(data)
     }
 
-    func read(exactly count: Int) async throws -> Data? {
-        try take(count)
+    func read(upTo maxCount: Int) async throws -> Data? {
+        take(maxCount)
     }
 
     func close() async {
@@ -51,15 +83,12 @@ final class ScriptedStream: ByteStream, @unchecked Sendable {
         written.append(data)
     }
 
-    private func take(_ count: Int) throws -> Data? {
+    private func take(_ maxCount: Int) -> Data? {
         lock.lock()
         defer { lock.unlock() }
-        guard inbound.count >= count else {
-            if inbound.isEmpty { return nil }
-            throw StreamStandInError.truncated
-        }
-        let head = Data(inbound.prefix(count))
-        inbound = Data(inbound.dropFirst(count))
+        guard !inbound.isEmpty else { return nil }
+        let head = Data(inbound.prefix(maxCount))
+        inbound = Data(inbound.dropFirst(head.count))
         return head
     }
 
@@ -70,22 +99,18 @@ final class ScriptedStream: ByteStream, @unchecked Sendable {
     }
 }
 
-enum StreamStandInError: Error {
-    case truncated
-}
-
 /// A stream that answers each logical message the client sends.
 ///
-/// Assumes `PassthroughTransport`, so a "ciphertext" chunk is just
-/// `[flag] ‖ payload`. Handshake frames are counted and ignored; every frame
-/// after them is treated as one complete application message.
+/// Assumes `PassthroughTransport`, so a "ciphertext" frame carries the envelope
+/// unchanged. Handshake frames are counted and ignored; every frame after them
+/// is treated as one complete application message.
 final class RespondingStream: ByteStream, @unchecked Sendable {
     typealias Responder = @Sendable (Data) throws -> Data?
 
     private let lock = NSLock()
     private let responder: Responder
     private var readable: Data
-    private var pendingWrite = Data()
+    private var pendingWrite = FrameBuffer()
     private var handshakeFramesToIgnore: Int
 
     init(handshakeReply: Data, handshakeFramesToIgnore: Int = 1, responder: @escaping Responder) {
@@ -98,8 +123,8 @@ final class RespondingStream: ByteStream, @unchecked Sendable {
         try consume(data)
     }
 
-    func read(exactly count: Int) async throws -> Data? {
-        try take(count)
+    func read(upTo maxCount: Int) async throws -> Data? {
+        take(maxCount)
     }
 
     func close() async {}
@@ -107,48 +132,34 @@ final class RespondingStream: ByteStream, @unchecked Sendable {
     private func consume(_ data: Data) throws {
         lock.lock()
         defer { lock.unlock() }
-        pendingWrite.append(data)
-        while let message = takeFrameLocked() {
+        pendingWrite.push(data)
+        while let envelope = try pendingWrite.take() {
             if handshakeFramesToIgnore > 0 {
                 handshakeFramesToIgnore -= 1
                 continue
             }
-            let (_, envelope) = try NoiseFraming.splitChunkHeader(message)
             if let reply = try responder(envelope) {
-                readable.append(try finalChunk(reply))
+                readable.append(try frameEncode(message: reply))
             }
         }
     }
 
-    private func take(_ count: Int) throws -> Data? {
+    private func take(_ maxCount: Int) -> Data? {
         lock.lock()
         defer { lock.unlock() }
-        guard readable.count >= count else {
-            if readable.isEmpty { return nil }
-            throw StreamStandInError.truncated
-        }
-        let head = Data(readable.prefix(count))
-        readable = Data(readable.dropFirst(count))
+        guard !readable.isEmpty else { return nil }
+        let head = Data(readable.prefix(maxCount))
+        readable = Data(readable.dropFirst(head.count))
         return head
-    }
-
-    private func takeFrameLocked() -> Data? {
-        guard pendingWrite.count >= 2 else { return nil }
-        let high = Int(pendingWrite[pendingWrite.startIndex])
-        let low = Int(pendingWrite[pendingWrite.index(after: pendingWrite.startIndex)])
-        let length = (high << 8) | low
-        guard pendingWrite.count >= 2 + length else { return nil }
-        let body = Data(pendingWrite.dropFirst(2).prefix(length))
-        pendingWrite = Data(pendingWrite.dropFirst(2 + length))
-        return body
     }
 }
 
 /// A `NoiseEngine` that does no cryptography.
 ///
 /// Test-only, and never a runtime fallback: `FFINoiseEngine` is the only engine
-/// the app target constructs. Handshake and transport messages pass through
-/// unchanged, which is what lets a test script the responder's bytes literally.
+/// the app target constructs. Handshake and transport payloads pass through
+/// unencrypted but *are* framed by the core, so a test scripts the responder's
+/// bytes in the same shape the agent would send them.
 final class PassthroughNoiseEngine: NoiseEngine, @unchecked Sendable {
     private let lock = NSLock()
     private let remoteStatic: Data
@@ -196,20 +207,53 @@ final class PassthroughNoiseEngine: NoiseEngine, @unchecked Sendable {
 
 final class PassthroughHandshake: NoiseHandshaking {
     private let remoteStatic: Data
+    private var inbound = FrameBuffer()
 
     init(remoteStatic: Data) {
         self.remoteStatic = remoteStatic
     }
 
-    func writeMessage(_ payload: Data) throws -> Data { payload }
-    func readMessage(_ message: Data) throws -> Data { message }
-    func remoteStaticPublicKey() throws -> Data { remoteStatic }
-    func intoTransport() throws -> any NoiseTransporting { PassthroughTransport() }
+    func writeMessage(_ payload: Data) throws -> Data {
+        try frameEncode(message: payload)
+    }
+
+    func pushBytes(_ data: Data) throws {
+        inbound.push(data)
+    }
+
+    func readMessage() throws -> Data? {
+        try inbound.take()
+    }
+
+    func intoTransport() throws -> any NoiseTransporting {
+        PassthroughTransport(remoteStatic: remoteStatic, buffered: inbound.drain())
+    }
 }
 
 final class PassthroughTransport: NoiseTransporting {
-    func encrypt(_ plaintext: Data) throws -> Data { plaintext }
-    func decrypt(_ ciphertext: Data) throws -> Data { ciphertext }
+    private let remoteStatic: Data
+    private var inbound = FrameBuffer()
+
+    init(remoteStatic: Data, buffered: Data = Data()) {
+        self.remoteStatic = remoteStatic
+        inbound.push(buffered)
+    }
+
+    func encrypt(_ payload: Data) throws -> Data {
+        try frameEncode(message: payload)
+    }
+
+    func pushBytes(_ data: Data) throws {
+        inbound.push(data)
+    }
+
+    func nextMessage() throws -> Data? {
+        try inbound.take()
+    }
+
+    func remoteStaticPublicKey() throws -> Data {
+        remoteStatic
+    }
 }
 
 /// A `PairingPayloadSource` that replays a scripted list of QR strings.
@@ -270,18 +314,4 @@ final class ScriptedPairingPayloadSource: PairingPayloadSource, @unchecked Senda
         continuation = nil
         return sink
     }
-}
-
-/// Build one wire frame: 2-byte big-endian length, then the message.
-func frame(_ message: Data) throws -> Data {
-    var out = try NoiseFraming.lengthPrefix(message.count)
-    out.append(message)
-    return out
-}
-
-/// Build one transport chunk as `PassthroughTransport` would carry it.
-func finalChunk(_ payload: Data) throws -> Data {
-    var chunk = Data([0x00])
-    chunk.append(payload)
-    return try frame(chunk)
 }

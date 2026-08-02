@@ -171,7 +171,7 @@ public struct PairRequestBody: OspreyMessageBody {
     public var identityPublicKey: Data
     /// X25519 Noise static public key, 32 bytes. Rotatable by re-signing; the identity key above is what makes a rotation trustworthy.
     public var noiseStaticPublicKey: Data
-    /// Cross-signature binding the Noise static to the identity key: Sign_identity("osprey/noise-static/v1" || device_id[16] || noise_static_public_key[32]). The receiver MUST reject the pairing if this does not verify.
+    /// Cross-signature binding the Noise static to the identity key: Sign_identity("osprey/cross-cert/noise-static/v1" || identity_public_key || noise_static_public_key[32]). The identity key is 32 bytes for ed25519 and 65 for p256 (X9.63 uncompressed); no length prefix is needed because `identity_algorithm` fixes that length before the verifier hashes anything. The receiver MUST reject the pairing if this does not verify. See brief amendment A22.
     public var noiseStaticSignature: Data
     /// Peer-supplied label shown beside the key fingerprint during host confirmation. Attacker-controlled text — display it, never trust it, never use it as an identifier.
     public var displayName: String

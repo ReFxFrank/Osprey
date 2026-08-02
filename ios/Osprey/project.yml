@@ -16,6 +16,16 @@
 # Osprey/Generated/: proto/generate.ts deletes every .swift in that directory it
 # did not itself emit, so a UniFFI binding parked there would silently vanish on
 # the next `pnpm generate` and break the iOS build in a way that looks unrelated.
+#
+# INFO.PLIST OWNERSHIP — Osprey/Info.plist is hand-maintained and authoritative.
+# This spec deliberately has no `info:` block: XcodeGen *overwrites* the file at
+# `info.path` from `info.properties` on every generate, which would have dropped
+# LSRequiresIPhoneOS (it exists only in the committed plist) the first time
+# anyone ran the tool. Add a key to Osprey/Info.plist, not here. The reverse
+# arrangement — generate the plist and gitignore it — was rejected because
+# docs/ios-build.md documents the committed file as present and because the
+# generated result would be an untracked file the repo's .gitignore does not
+# cover.
 
 name: Osprey
 
@@ -33,6 +43,12 @@ settings:
     SWIFT_STRICT_CONCURRENCY: complete
     ENABLE_USER_SCRIPT_SANDBOXING: NO
     CODE_SIGN_STYLE: Automatic
+    # Without a team, Automatic signing leaves the generated project unrunnable
+    # from the Xcode UI until someone picks one by hand — a cost paid in metered
+    # cloud-Mac minutes every time the project is regenerated. Team FM8Z8BA64H
+    # is the one com.ospreyremote.app is registered under (amendment A21). CI
+    # overrides this for the archive step with the APPLE_TEAM_ID secret.
+    DEVELOPMENT_TEAM: FM8Z8BA64H
 
 targets:
   Osprey:
@@ -47,38 +63,15 @@ targets:
       - path: Frameworks/osprey_ffi.swift
         optional: true
         group: Frameworks
-    info:
-      path: Osprey/Info.plist
-      properties:
-        CFBundleDisplayName: Osprey
-        CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "1"
-        UILaunchScreen: {}
-        UISupportedInterfaceOrientations:
-          - UIInterfaceOrientationPortrait
-          - UIInterfaceOrientationLandscapeLeft
-          - UIInterfaceOrientationLandscapeRight
-        # Camera: the QR pairing scan. Absent, the first capture attempt is a
-        # hard crash, not a permission denial.
-        NSCameraUsageDescription: >-
-          Osprey scans the pairing QR code shown on your computer. Pairing
-          requires physical access to that machine.
-        # iOS 14+ prompts on ANY local-network connection, including a plain TCP
-        # connect to a private address. Absent, the connection silently never
-        # becomes ready.
-        NSLocalNetworkUsageDescription: >-
-          Osprey connects directly to your computer on your local network, so
-          your screen and files never leave your own machines.
-        # Required to browse the agent's mDNS advertisement (amendment A6).
-        NSBonjourServices:
-          - _osprey._tcp
-        # Osprey uses only standard, exempt cryptography (Noise/TLS). Declaring
-        # this avoids the export-compliance question on every TestFlight upload.
-        ITSAppUsesNonExemptEncryption: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.ospreyremote.app
         TARGETED_DEVICE_FAMILY: "1,2"
+        # Relative to SRCROOT, which for a project generated into ios/Osprey is
+        # ios/Osprey. Set here rather than via an `info:` block so XcodeGen
+        # points at the committed plist instead of rewriting it — see INFO.PLIST
+        # OWNERSHIP at the top of this file.
+        INFOPLIST_FILE: Osprey/Info.plist
         GENERATE_INFOPLIST_FILE: NO
     dependencies:
       # Static library + C shim modulemap produced by scripts/build-xcframework.sh
@@ -97,6 +90,17 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.ospreyremote.app.tests
+        DEVELOPMENT_TEAM: FM8Z8BA64H
+        # Every file in OspreyTests does `@testable import Osprey`, so the bundle
+        # has to be loaded by the app rather than run as a free-standing logic
+        # test. Spelled out rather than left to XcodeGen's inference so the
+        # requirement is visible where it is depended on.
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/Osprey.app/Osprey
+        BUNDLE_LOADER: $(TEST_HOST)
+        # An .xctest bundle will not load without an Info.plist. The app's is
+        # committed; the test bundle's carries nothing worth reviewing, so let
+        # Xcode synthesise it.
+        GENERATE_INFOPLIST_FILE: YES
 
 schemes:
   Osprey:

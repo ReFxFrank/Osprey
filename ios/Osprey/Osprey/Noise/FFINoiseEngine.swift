@@ -6,56 +6,19 @@ import Foundation
 // (`osprey_ffiFFI`) from the XCFramework's modulemap itself. Importing a
 // hand-guessed module name here would fail to compile.
 
-/// The only file in the app that touches the Rust core.
+/// The only file in the app that names a generated Rust symbol.
 ///
 /// Noise is not reimplemented in Swift: both ends run the same `snow` build, so
 /// the entire class of cross-implementation handshake bugs — transcript-hash
 /// divergence, nonce encoding, PSK ordering — cannot occur (execution plan §4).
-/// Everything the app does *around* Noise lives in Swift and is testable without
-/// the framework.
 ///
-/// ## The contract this file expects from `agent/osprey-ffi`
-///
-/// UniFFI, procedural macros, no UDL. Lower-camel-cases into Swift as written:
-///
-/// ```rust
-/// #[derive(uniffi::Error, thiserror::Error, Debug)]
-/// pub enum NoiseFfiError { #[error("{message}")] Noise { message: String }, … }
-///
-/// #[derive(uniffi::Object)]
-/// pub struct NoiseHandshake { /* Mutex<Option<snow::HandshakeState>> */ }
-///
-/// #[uniffi::export]
-/// impl NoiseHandshake {
-///     #[uniffi::constructor]
-///     pub fn pairing_initiator(local_static: Vec<u8>, remote_static: Vec<u8>,
-///                              psk: Vec<u8>) -> Result<Arc<Self>, NoiseFfiError>;
-///     #[uniffi::constructor]
-///     pub fn session_initiator(local_static: Vec<u8>, remote_static: Vec<u8>)
-///                              -> Result<Arc<Self>, NoiseFfiError>;
-///     pub fn write_message(&self, payload: Vec<u8>) -> Result<Vec<u8>, NoiseFfiError>;
-///     pub fn read_message(&self, message: Vec<u8>) -> Result<Vec<u8>, NoiseFfiError>;
-///     pub fn remote_static_public_key(&self) -> Result<Vec<u8>, NoiseFfiError>;
-///     pub fn into_transport(&self) -> Result<Arc<NoiseTransport>, NoiseFfiError>;
-/// }
-///
-/// #[derive(uniffi::Object)]
-/// pub struct NoiseTransport { /* Mutex<snow::TransportState> */ }
-///
-/// #[uniffi::export]
-/// impl NoiseTransport {
-///     pub fn encrypt(&self, plaintext: Vec<u8>) -> Result<Vec<u8>, NoiseFfiError>;
-///     pub fn decrypt(&self, ciphertext: Vec<u8>) -> Result<Vec<u8>, NoiseFfiError>;
-/// }
-/// ```
-///
-/// `Vec<u8>` crosses as `Data`. Every method is synchronous and infallible-free:
-/// a malformed or tampered message returns an error, never a panic, because a
-/// Rust panic across the FFI boundary aborts the app.
-///
-/// Framing, chunking and the 65535-byte message ceiling are deliberately *not*
-/// on the Rust side of this boundary — they are in `NoiseFraming`, where they
-/// can be tested on any machine.
+/// Neither is framing. `osprey-ffi` length-prefixes handshake messages and
+/// chunks transport payloads itself, so everything crossing this boundary is
+/// already wire-ready; this file adapts spellings and nothing else. The
+/// generated surface is authoritative — regenerate it with
+/// `cargo run -p osprey-ffi --features bindgen-cli --bin uniffi-bindgen -- \
+/// generate --library <lib> --language swift` and read it, rather than trusting
+/// a description of it.
 public struct FFINoiseEngine: NoiseEngine {
     public init() {}
 
@@ -82,6 +45,24 @@ public struct FFINoiseEngine: NoiseEngine {
     }
 }
 
+/// The cross-certificate byte string, taken from the Rust core rather than
+/// rebuilt.
+///
+/// `osprey-ffi` exports it precisely so Swift never defines it a second time
+/// (`osprey-ffi/src/identity.rs`: "Swift asks `cross_certificate_bytes` for the
+/// exact message to sign"). The agent is the verifier, so a Swift restatement
+/// that drifted would surface only as "signature does not verify" — never as a
+/// parse error — on a phone that had already been shipped.
+public enum CrossCertificate {
+    public static func message(
+        identityPublicKey: Data,
+        noiseStaticPublicKey: Data
+    ) throws -> Data {
+        try crossCertificateBytes(
+            identityPub: identityPublicKey, noiseStaticPub: noiseStaticPublicKey)
+    }
+}
+
 /// Adapts the generated UniFFI object to the app's protocol.
 ///
 /// The adapter exists so the generated type's exact spelling is confined to this
@@ -98,12 +79,12 @@ final class FFIHandshake: NoiseHandshaking {
         try inner.writeMessage(payload: payload)
     }
 
-    func readMessage(_ message: Data) throws -> Data {
-        try inner.readMessage(message: message)
+    func pushBytes(_ data: Data) throws {
+        try inner.pushBytes(data: data)
     }
 
-    func remoteStaticPublicKey() throws -> Data {
-        try inner.remoteStaticPublicKey()
+    func readMessage() throws -> Data? {
+        try inner.readMessage()
     }
 
     func intoTransport() throws -> any NoiseTransporting {
@@ -118,11 +99,19 @@ final class FFITransport: NoiseTransporting {
         self.inner = inner
     }
 
-    func encrypt(_ plaintext: Data) throws -> Data {
-        try inner.encrypt(plaintext: plaintext)
+    func encrypt(_ payload: Data) throws -> Data {
+        try inner.encrypt(payload: payload)
     }
 
-    func decrypt(_ ciphertext: Data) throws -> Data {
-        try inner.decrypt(ciphertext: ciphertext)
+    func pushBytes(_ data: Data) throws {
+        try inner.pushBytes(data: data)
+    }
+
+    func nextMessage() throws -> Data? {
+        try inner.nextMessage()
+    }
+
+    func remoteStaticPublicKey() throws -> Data {
+        try inner.remoteStatic()
     }
 }

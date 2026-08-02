@@ -11,18 +11,17 @@ final class SessionClientTests: XCTestCase {
         responder: @escaping RespondingStream.Responder
     ) async throws -> SessionClient {
         let stream = RespondingStream(
-            handshakeReply: try frame(Data()), responder: responder)
+            handshakeReply: try frameEncode(message: Data()), responder: responder)
         let channel = NoiseChannel(engine: PassthroughNoiseEngine(remoteStatic: staticKey))
-        let framed = FramedStream(stream: stream)
         let first = try await channel.begin(
             pattern: .session,
             localStaticPrivateKey: staticKey,
             remoteStaticPublicKey: staticKey,
             payload: Data())
-        try await framed.writeFrame(first)
-        let secondFrame = try await framed.readFrame()
-        let second = try XCTUnwrap(secondFrame)
-        _ = try await channel.complete(second)
+        try await stream.write(first)
+        let handshakePayload = try await readHandshakePayload(channel: channel, stream: stream)
+        _ = try XCTUnwrap(handshakePayload, "the scripted host must answer the handshake")
+        _ = try await channel.promote()
         return SessionClient(session: NoiseSession(channel: channel, stream: stream))
     }
 

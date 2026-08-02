@@ -463,7 +463,8 @@ Trade-offs, and why this is not the iteration loop:
   installable. That is the killer for a debug loop.
 - **Builds expire after 90 days.**
 - Every upload needs a **unique `CFBundleVersion`**, currently hardcoded to `1`
-  in both `Info.plist` and `project.yml`. Bump it before the second upload.
+  in `Info.plist`, which is now its only home — `project.yml` no longer carries
+  an `info:` block. Bump it before the second upload.
 - Export compliance is already answered: `ITSAppUsesNonExemptEncryption` is
   `false` in `Info.plist`, so the encryption question is not asked per upload.
 

@@ -7,6 +7,12 @@ import Foundation
 /// synchronous internally — there is no `await` between reading the handshake
 /// state and writing it back — which means the actor cannot be re-entered
 /// half-way through a handshake step. I/O happens in `NoiseSession`, above.
+///
+/// Nothing here reads or writes a length prefix, a chunk header or a
+/// continuation flag: what `begin` and `seal` return is wire-ready exactly as the
+/// Rust core produced it, and what `push` takes is whatever the socket returned.
+/// A Swift framing layer would put a second prefix on every message, which is
+/// the bug this shape exists to make unrepresentable.
 public actor NoiseChannel {
     /// Which handshake to run.
     public enum Pattern: Sendable {
@@ -24,7 +30,7 @@ public actor NoiseChannel {
         self.engine = engine
     }
 
-    /// Build the handshake and produce the first message.
+    /// Build the handshake and produce the first message's wire bytes.
     public func begin(
         pattern: Pattern,
         localStaticPrivateKey: Data,
@@ -59,32 +65,56 @@ public actor NoiseChannel {
         return try started.writeMessage(payload)
     }
 
-    /// Consume the responder's message and promote to transport mode.
+    /// Hand socket bytes to whichever half of the channel is live.
     ///
-    /// A tampered byte anywhere in `message` surfaces here as a thrown error.
-    /// It is never silently tolerated and it never traps.
-    public func complete(_ message: Data) throws -> HandshakeResult {
+    /// The reassembly buffer and its ceiling live in the Rust core, so a peer
+    /// that dribbles bytes without ever completing a frame is refused there
+    /// rather than allowed to grow a buffer here.
+    public func push(_ data: Data) throws {
+        if let transport {
+            try transport.pushBytes(data)
+            return
+        }
         guard let handshake else { throw NoiseChannelError.handshakeNotStarted }
-        let payload = try handshake.readMessage(message)
-        let remoteStatic = try handshake.remoteStaticPublicKey()
-        try Self.requireStaticKeyLength(remoteStatic, label: "peer Noise static")
-        transport = try handshake.intoTransport()
+        try handshake.pushBytes(data)
+    }
+
+    /// The responder's decrypted handshake payload, once a whole message has
+    /// arrived; `nil` while more socket bytes are needed.
+    ///
+    /// A tampered byte anywhere in that message surfaces here as a thrown error.
+    /// It is never silently tolerated and it never traps.
+    public func handshakePayload() throws -> Data? {
+        guard let handshake else { throw NoiseChannelError.handshakeNotStarted }
+        return try handshake.readMessage()
+    }
+
+    /// Promote to transport mode and hand back the peer static the handshake
+    /// authenticated.
+    ///
+    /// Promotion comes first and the key is read afterwards, because the
+    /// authenticated static is a property of a *completed* handshake: asking a
+    /// half-finished one would be asking for a key nothing has proved yet.
+    public func promote() throws -> Data {
+        guard let handshake else { throw NoiseChannelError.handshakeNotStarted }
+        let established = try handshake.intoTransport()
         self.handshake = nil
-        return HandshakeResult(payload: payload, remoteStaticPublicKey: remoteStatic)
+        transport = established
+        let remoteStatic = try established.remoteStaticPublicKey()
+        try Self.requireStaticKeyLength(remoteStatic, label: "peer Noise static")
+        return remoteStatic
     }
 
-    /// Encrypt one logical payload into its wire chunks.
-    public func seal(_ payload: Data) throws -> [Data] {
+    /// Encrypt one logical payload into its wire bytes.
+    public func seal(_ payload: Data) throws -> Data {
         guard let transport else { throw NoiseChannelError.transportNotEstablished }
-        return try NoiseFraming.split(payload).map(transport.encrypt)
+        return try transport.encrypt(payload)
     }
 
-    /// Decrypt one wire chunk and strip its continuation flag.
-    public func open(chunk ciphertext: Data) throws -> NoiseChunk {
+    /// The next decrypted message, or `nil` while more socket bytes are needed.
+    public func nextMessage() throws -> Data? {
         guard let transport else { throw NoiseChannelError.transportNotEstablished }
-        let plaintext = try transport.decrypt(ciphertext)
-        let (isFinal, body) = try NoiseFraming.splitChunkHeader(plaintext)
-        return NoiseChunk(isFinal: isFinal, body: body)
+        return try transport.nextMessage()
     }
 
     private static func requireStaticKeyLength(_ key: Data, label: String) throws {
@@ -93,15 +123,4 @@ public actor NoiseChannel {
                 label: label, expected: NoiseKeySizes.staticKeyLength, found: key.count)
         }
     }
-}
-
-public struct HandshakeResult: Hashable, Sendable {
-    /// The responder's decrypted second-message payload.
-    public let payload: Data
-    public let remoteStaticPublicKey: Data
-}
-
-public struct NoiseChunk: Hashable, Sendable {
-    public let isFinal: Bool
-    public let body: Data
 }

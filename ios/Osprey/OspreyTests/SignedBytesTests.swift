@@ -60,6 +60,29 @@ final class SignedBytesTests: XCTestCase {
         XCTAssertEqual(Data(body.suffix(32)), nonce)
     }
 
+    /// `SignedBytes.crossCertificate` is the offline mirror of the core's
+    /// `cross_certificate_bytes`, kept only so `IdentityVerifier` can check a
+    /// peer's bundle with CryptoKit. They agree today, which is exactly why a
+    /// drift would be invisible: nothing on either side would fail to parse, and
+    /// the first symptom would be a phone that cannot pair.
+    ///
+    /// Both identity key lengths are covered, because the layout has no length
+    /// prefix and a bug that only bit one algorithm would be missed by the other.
+    func testTheOfflineMirrorMatchesTheCore() throws {
+        let noiseStatic = Data(repeating: 0xB2, count: 32)
+        for identityPublicKey in [
+            Data(repeating: 0xA1, count: 32),  // Ed25519, the agent's algorithm
+            Data([0x04]) + Data(repeating: 0xA1, count: 64),  // P-256, this phone's
+        ] {
+            XCTAssertEqual(
+                SignedBytes.crossCertificate(
+                    identityPublicKey: identityPublicKey, noiseStaticPublicKey: noiseStatic),
+                try CrossCertificate.message(
+                    identityPublicKey: identityPublicKey, noiseStaticPublicKey: noiseStatic),
+                "identity key of \(identityPublicKey.count) bytes")
+        }
+    }
+
     func testUUIDBytesAreNetworkOrder() throws {
         let uuid = try XCTUnwrap(UUID(uuidString: "01020304-0506-0708-090a-0b0c0d0e0f10"))
         XCTAssertEqual(

@@ -31,16 +31,25 @@ public struct PairingCoordinator: Sendable {
         guard !endpoints.isEmpty else { throw QRPayloadError.noReachableAddress }
 
         let stream = try await Self.dial(endpoints)
-        let session = try await withStreamDeadline(
-            seconds: Self.exchangeTimeout, stream: stream
-        ) {
-            try await PairingFlow.run(
-                stream: stream,
-                engine: engine,
-                localNoiseStaticPrivateKey: identity.noiseStaticPrivateKey,
-                localPublicIdentity: identity.publicIdentity,
-                expectedAgentIdentity: payload.agentIdentity,
-                pairingSecret: payload.pairingSecret)
+        let session: NoiseSession
+        do {
+            session = try await withStreamDeadline(
+                seconds: Self.exchangeTimeout, stream: stream
+            ) {
+                try await PairingFlow.run(
+                    stream: stream,
+                    engine: engine,
+                    localNoiseStaticPrivateKey: identity.noiseStaticPrivateKey,
+                    localPublicIdentity: identity.publicIdentity,
+                    expectedAgentIdentity: payload.agentIdentity,
+                    pairingSecret: payload.pairingSecret)
+            }
+        } catch {
+            // Refusal is the *expected* outcome when a relay has substituted the
+            // agent's key, so the failure path carries real traffic and must not
+            // leak the socket. Close before rethrowing.
+            await stream.close()
+            throw error
         }
 
         // The agent hangs up after `pair` and serves sessions from a separate

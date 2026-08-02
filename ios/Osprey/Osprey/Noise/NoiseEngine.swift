@@ -4,13 +4,15 @@ import Foundation
 ///
 /// Noise itself is never reimplemented in Swift: both ends run the same `snow`
 /// build, which is the whole reason the product has one Noise implementation
-/// rather than two (execution plan §4). Everything above the raw
-/// encrypt/decrypt pair — framing, chunking, message ordering — lives in Swift
-/// because it is testable without a device.
+/// rather than two (execution plan §4).
 ///
-/// The surface is deliberately synchronous and byte-in/byte-out: no callbacks,
-/// no async, nothing that has to be re-entered. `NoiseChannel` is what makes it
-/// safe to touch from Swift concurrency.
+/// Framing and chunking are not reimplemented here either. `osprey-ffi` already
+/// length-prefixes every handshake message and splits every transport payload
+/// into flagged chunks, so a Swift framing layer would put a second prefix and a
+/// second continuation flag on the wire and no handshake would ever complete.
+/// The shape below therefore mirrors the Rust surface exactly — write bytes,
+/// push bytes, poll for a message — rather than pretending the boundary is
+/// message-at-a-time.
 public protocol NoiseEngine: Sendable {
     /// `Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s`, initiator, PSK at position 2.
     /// The phone is always the initiator (amendment A15).
@@ -31,20 +33,39 @@ public protocol NoiseEngine: Sendable {
 
 /// A handshake in progress. Both Osprey patterns are two messages, so an
 /// initiator writes once and reads once.
+///
+/// Mirrors `osprey_ffi::NoiseHandshake`. The argument labels are dropped to keep
+/// Swift call sites idiomatic; the semantics are the Rust ones and must stay
+/// that way.
 public protocol NoiseHandshaking: AnyObject {
+    /// The next handshake message carrying `payload`, already framed and ready
+    /// to write to the socket verbatim.
     func writeMessage(_ payload: Data) throws -> Data
-    func readMessage(_ message: Data) throws -> Data
-    /// The peer static the handshake authenticated, valid once the handshake is
-    /// complete. This is the value the caller compares against its pin.
-    func remoteStaticPublicKey() throws -> Data
+    /// Hand over bytes just read from the socket.
+    func pushBytes(_ data: Data) throws
+    /// The peer's decrypted handshake payload, or `nil` while a complete message
+    /// has not arrived yet. A tampered byte throws; it is never tolerated.
+    func readMessage() throws -> Data?
+    /// Promote the finished handshake, carrying any bytes the peer pipelined
+    /// past it across to the transport so none are lost at the boundary.
     func intoTransport() throws -> any NoiseTransporting
 }
 
-/// An established transport. One call per Noise message, not per logical
-/// payload: chunking happens above this.
+/// An established transport. One call per *logical* payload: chunking happens
+/// below this, inside the Rust core.
 public protocol NoiseTransporting: AnyObject {
-    func encrypt(_ plaintext: Data) throws -> Data
-    func decrypt(_ ciphertext: Data) throws -> Data
+    /// Encrypt `payload` into wire bytes — chunked and framed, all of which must
+    /// be written to the socket in order.
+    func encrypt(_ payload: Data) throws -> Data
+    /// Hand over bytes just read from the socket.
+    func pushBytes(_ data: Data) throws
+    /// The next complete message, or `nil` while more bytes are needed. One
+    /// socket read can carry several, so callers poll until it returns `nil`.
+    func nextMessage() throws -> Data?
+    /// The peer static the handshake authenticated. This is the value the caller
+    /// compares against its pin, and it lives on the transport because only a
+    /// completed handshake has proved it.
+    func remoteStaticPublicKey() throws -> Data
 }
 
 public enum NoiseChannelError: Error, Hashable, Sendable {
@@ -52,7 +73,6 @@ public enum NoiseChannelError: Error, Hashable, Sendable {
     case handshakeAlreadyStarted
     case transportNotEstablished
     case badKeyLength(label: String, expected: Int, found: Int)
-    case peerStaticDoesNotMatchPin
 }
 
 extension NoiseChannelError: LocalizedError {
@@ -66,8 +86,6 @@ extension NoiseChannelError: LocalizedError {
             return "the Noise transport is not established"
         case .badKeyLength(let label, let expected, let found):
             return "\(label) must be \(expected) bytes, got \(found)"
-        case .peerStaticDoesNotMatchPin:
-            return "the host presented a Noise key that is not the pinned one"
         }
     }
 }

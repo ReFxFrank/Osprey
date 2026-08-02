@@ -170,10 +170,6 @@ jobs:
 
     env:
       XCODE_MAJOR: ${{ inputs.xcode_major || '26' }}
-      # TODO(frank): ios/Osprey/project.yml does not exist yet — XcodeGen is the
-      # declared source of truth for the project but the spec has never been
-      # written, so these three names are the ones this workflow *expects* and
-      # the spec must be authored to match (or these updated to match it).
       XCODEGEN_SPEC: ios/Osprey/project.yml
       XCODE_PROJECT: ios/Osprey/Osprey.xcodeproj
       XCODE_SCHEME: Osprey
@@ -319,14 +315,16 @@ jobs:
         # Gate P0 criterion 7 is "cargo clippy -- -D warnings and swiftlint
         # clean", and the swiftlint half is currently NOT MEASURED. If this step
         # is red on its first run that is the unmeasured criterion showing its
-        # true value, not a workflow bug. There is no .swiftlint.yml in the repo
-        # yet, so the default rule set applies.
-        # TODO(frank): add ios/.swiftlint.yml deciding which default rules Osprey
-        # actually adopts, then decide whether --strict (warnings become errors)
-        # is the standard this gate is held to.
+        # true value, not a workflow bug.
+        #
+        # No working-directory, and --config spelled out: SwiftLint finds an
+        # implicit config by walking up from the linted files, so running from
+        # ios/ would miss the repo-root .swiftlint.yml and fall back to the
+        # default rule set — which does not exclude Generated/ and errors on
+        # eight generated lines over its 200-column default. --strict is what
+        # .swiftlint.yml documents as the standard, so warnings fail too.
         if: ${{ !cancelled() }}
-        working-directory: ios
-        run: swiftlint lint --reporter github-actions-logging
+        run: swiftlint lint --config .swiftlint.yml --strict --reporter github-actions-logging
 
       # ---------------------------------------------------------------- ship
       - name: Import the signing certificate

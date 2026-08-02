@@ -36,8 +36,10 @@ final class PairingFlowTests: XCTestCase {
         accept: Data = PairingFlow.acceptTag
     ) throws -> Data {
         var script = Data()
-        script.append(try frame(try JSONEncoder().encode(IdentityMessage(identity: identity))))
-        script.append(try finalChunk(accept))
+        script.append(
+            try frameEncode(
+                message: try JSONEncoder().encode(IdentityMessage(identity: identity))))
+        script.append(try frameEncode(message: accept))
         return script
     }
 
@@ -58,18 +60,17 @@ final class PairingFlowTests: XCTestCase {
         XCTAssertEqual(engine.pairingSecretSeen, Data(repeating: 0xD4, count: 32))
 
         // Frame 1 is the phone's identity; frame 2 is the confirmation the agent
-        // needs before it will pin anything.
-        let written = ScriptedStream(inbound: stream.outbound)
-        let framed = FramedStream(stream: written)
-        let helloFrame = try await framed.readFrame()
-        let hello = try XCTUnwrap(helloFrame)
+        // needs before it will pin anything. Each is *one* frame with no inner
+        // prefix and no continuation flag — the exact thing double-framing broke.
+        var written = FrameBuffer()
+        written.push(stream.outbound)
+        let hello = try XCTUnwrap(try written.take())
         let offered = try JSONDecoder().decode(IdentityMessage.self, from: hello)
         XCTAssertEqual(offered.identity, Self.phoneIdentity())
 
-        let confirmFrame = try await framed.readFrame()
-        XCTAssertEqual(confirmFrame, Data([0x00]) + PairingFlow.confirmTag)
-        let trailing = try await framed.readFrame()
-        XCTAssertNil(trailing, "nothing else may be sent")
+        XCTAssertEqual(try written.take(), PairingFlow.confirmTag)
+        XCTAssertNil(try written.take(), "nothing else may be sent")
+        XCTAssertTrue(written.pending.isEmpty, "no trailing bytes outside a frame")
 
         await session.close()
         XCTAssertTrue(stream.isClosed)

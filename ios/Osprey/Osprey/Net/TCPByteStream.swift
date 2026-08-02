@@ -87,7 +87,13 @@ public final class TCPByteStream: ByteStream, @unchecked Sendable {
             }
             connection.start(queue: queue)
             queue.asyncAfter(deadline: .now() + timeout) { [weak self] in
-                once.resume(.failure(TCPStreamError.timedOut(seconds: timeout)))
+                // Only the resume that *wins* may cancel. This closure still runs
+                // `timeout` seconds after a healthy connection became ready, and
+                // cancelling unconditionally there tore down every live session
+                // at the connect deadline, mid-exchange, under the caller.
+                guard once.resume(.failure(TCPStreamError.timedOut(seconds: timeout))) else {
+                    return
+                }
                 self?.connection.cancel()
             }
         }
@@ -110,28 +116,32 @@ public final class TCPByteStream: ByteStream, @unchecked Sendable {
         }
     }
 
-    public func read(exactly count: Int) async throws -> Data? {
-        guard count > 0 else { return Data() }
+    public func read(upTo maxCount: Int) async throws -> Data? {
+        guard maxCount > 0 else { throw TCPStreamError.badReadLength(maxCount) }
         return try await withCheckedThrowingContinuation {
             (continuation: CheckedContinuation<Data?, any Error>) in
             let once = ResumeOnce<Data?>(continuation)
-            connection.receive(minimumIncompleteLength: count, maximumLength: count) {
+            // `minimumIncompleteLength: 1` is what makes this a byte pump rather
+            // than a framer: it returns as soon as anything has arrived, and the
+            // Rust core decides when it has a whole message.
+            connection.receive(minimumIncompleteLength: 1, maximumLength: maxCount) {
                 data, _, isComplete, error in
                 if let error {
                     once.resume(.failure(TCPStreamError.receiveFailed(String(describing: error))))
                     return
                 }
-                let received = data ?? Data()
-                if received.count == count {
-                    once.resume(.success(received))
-                } else if isComplete && received.isEmpty {
-                    // A clean close on a frame boundary. The caller decides
-                    // whether that is an orderly end or a truncation.
+                if let data, !data.isEmpty {
+                    once.resume(.success(data))
+                } else if isComplete {
                     once.resume(.success(nil))
                 } else {
+                    // Network.framework only completes with neither bytes nor
+                    // error once the stream is finished, so this is a contract
+                    // violation rather than a retryable read.
                     once.resume(
                         .failure(
-                            TCPStreamError.truncated(expected: count, received: received.count)))
+                            TCPStreamError.receiveFailed(
+                                "no bytes and no error on an open connection")))
                 }
             }
         }
@@ -159,12 +169,17 @@ private final class ResumeOnce<Value: Sendable>: @unchecked Sendable {
         self.continuation = continuation
     }
 
-    func resume(_ result: Result<Value, any Error>) {
+    /// `true` if this call is the one that resumed. A caller with a side effect
+    /// that must only happen on its own outcome — cancelling the connection when
+    /// the deadline wins — branches on this rather than firing regardless.
+    @discardableResult
+    func resume(_ result: Result<Value, any Error>) -> Bool {
         lock.lock()
         let pending = continuation
         continuation = nil
         lock.unlock()
         pending?.resume(with: result)
+        return pending != nil
     }
 }
 
@@ -175,7 +190,7 @@ public enum TCPStreamError: Error, Hashable, Sendable {
     case timedOut(seconds: TimeInterval)
     case sendFailed(String)
     case receiveFailed(String)
-    case truncated(expected: Int, received: Int)
+    case badReadLength(Int)
 }
 
 extension TCPStreamError: LocalizedError {
@@ -195,9 +210,8 @@ extension TCPStreamError: LocalizedError {
             return "Could not send to the host: \(detail)"
         case .receiveFailed(let detail):
             return "Could not read from the host: \(detail)"
-        case .truncated(let expected, let received):
-            return "The host closed the connection mid-message "
-                + "(\(received) of \(expected) bytes)."
+        case .badReadLength(let count):
+            return "A read of \(count) bytes was requested, which is not a length."
         }
     }
 }

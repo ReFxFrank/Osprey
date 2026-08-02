@@ -33,7 +33,6 @@ public enum PairingFlow {
         pairingSecret: Data
     ) async throws -> NoiseSession {
         let channel = NoiseChannel(engine: engine)
-        let framed = FramedStream(stream: stream)
 
         let hello = try JSONEncoder().encode(IdentityMessage(identity: localPublicIdentity))
         let first = try await channel.begin(
@@ -41,16 +40,17 @@ public enum PairingFlow {
             localStaticPrivateKey: localNoiseStaticPrivateKey,
             remoteStaticPublicKey: expectedAgentIdentity.noiseStaticPublicKey,
             payload: hello)
-        try await framed.writeFrame(first)
+        // Written verbatim: the core already framed it.
+        try await stream.write(first)
 
-        guard let second = try await framed.readFrame() else {
+        guard let second = try await readHandshakePayload(channel: channel, stream: stream) else {
             throw PairingError.hostClosedDuringHandshake
         }
-        let result = try await channel.complete(second)
+        let remoteStaticPublicKey = try await channel.promote()
 
         let offered: IdentityMessage
         do {
-            offered = try JSONDecoder().decode(IdentityMessage.self, from: result.payload)
+            offered = try JSONDecoder().decode(IdentityMessage.self, from: second)
         } catch {
             throw PairingError.malformedHostIdentity(String(describing: error))
         }
@@ -64,7 +64,7 @@ public enum PairingFlow {
         // …and the key the handshake actually authenticated has to be the one
         // that bundle vouches for, or a peer could have one key vouched for and
         // use another.
-        guard offered.identity.noiseStaticPublicKey == result.remoteStaticPublicKey else {
+        guard offered.identity.noiseStaticPublicKey == remoteStaticPublicKey else {
             throw PairingError.hostStaticMismatch
         }
 

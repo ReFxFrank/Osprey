@@ -840,6 +840,8 @@ here because getting them wrong fails silently rather than loudly:
   variable length — not the fixed-width `r || s` form.
 - The signed byte string is identical across both algorithms:
   `"osprey/noise-static/v1" || device_id[16] || noise_static_public_key[32]`.
+  **This line is wrong and is superseded by A22** — it is not what either
+  implementation signs, and never was. See A22 for the string that ships.
 
 ### A21 — Bundle identifier carries no personal or brand prefix
 Superseding the identifier recorded in A2: the bundle identifier is
@@ -857,3 +859,63 @@ configuration exists. Bundle identifiers are globally unique across the App
 Store, and changing one after first pairing invalidates Keychain access groups —
 the identity key, the Noise static, and the host pin all live in the keychain
 under that identity — which would force every paired device to re-pair.
+
+### A22 — The cross-certificate byte string, as actually implemented (documentation correction, not a protocol change)
+
+**No code changes as a result of this amendment.** The Rust agent and the Swift
+client already agree byte-for-byte, are covered by fixed-vector tests on both
+sides, and every existing pin was created under the string recorded here.
+Changing the implementation to match the old documentation would invalidate
+every pinned peer and force a re-pair, which is exactly the outcome A21 exists
+to avoid. The documentation was wrong; the code was not.
+
+`proto/messages.toml` and A20 both described the identity→Noise-static
+cross-signature as
+
+```
+Sign_identity("osprey/noise-static/v1" || device_id[16] || noise_static_public_key[32])
+```
+
+Neither implementation has ever done that. What both actually sign is
+
+```
+Sign_identity("osprey/cross-cert/noise-static/v1" || identity_public_key || noise_static_public_key[32])
+```
+
+Two differences: a different domain separator, and the **identity public key**
+in the position the docs gave to the device id. `identity_public_key` is 32
+bytes for `ed25519` and 65 for `p256` (X9.63 uncompressed, per A20). No length
+prefix is needed — `identity_algorithm` fixes that length before the verifier
+hashes anything, and the key is inside the message it authenticates.
+
+**Why the implementation is the authoritative one, not merely the incumbent.**
+The certificate's job is to bind a rotatable Noise static to the durable root of
+trust. What a verifier pins is the identity key; the device id is a label it
+never pins and an attacker supplies. Covering the identity key means a captured
+signature cannot be replayed under a different identity, and a peer that rotates
+its static re-signs under the same pinned key. Covering a device id instead
+would authenticate a field nobody checks. The shipped string is the correct
+design; the brief recorded the wrong one.
+
+Corrected in `proto/messages.toml` (`pair.request.noise_static_signature`), the
+single source of truth, so generated Rust and Swift doc comments now carry the
+real construction. The hazard being closed is a second implementer — or a future
+refactor "restoring" the documented form — following the brief and producing
+signatures nothing verifies.
+
+Pinned by, and reproducible from:
+
+- `agent/osprey-core/tests/identity_p256.rs` —
+  `the_p256_signed_byte_string_matches_a_fixed_vector` asserts the full 130-byte
+  message against a literal hex vector, and
+  `the_ed25519_signed_byte_string_is_unchanged_by_the_algorithm_split` asserts
+  the 97-byte Ed25519 form.
+- `agent/osprey-ffi/tests/bridge.rs` —
+  `the_signed_message_binds_the_identity_key_and_the_static`.
+- `ios/Osprey/OspreyTests/SignedBytesTests.swift` —
+  `testCrossCertificateContextIsExactlyTheAgentsConstant` asserts the separator
+  literally rather than reconstructing it.
+
+The constants live at `osprey_core::identity::CROSS_SIG_CONTEXT` and
+`SignedBytes.crossCertificateContext`; the layouts at
+`osprey_core::identity::cross_sig_message` and `SignedBytes.crossCertificate`.

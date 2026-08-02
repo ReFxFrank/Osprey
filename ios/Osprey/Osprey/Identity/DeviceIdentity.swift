@@ -161,7 +161,10 @@ public enum DeviceIdentityStore {
 
         let identityPublicKey = enclaveKey.publicKey.x963Representation
         let noiseStaticPublicKey = noiseKey.publicKey.rawRepresentation
-        let message = SignedBytes.crossCertificate(
+        // From the Rust core, not rebuilt here: the agent verifies this
+        // signature, and `osprey-ffi` exports the byte string precisely so the
+        // signer and the verifier cannot drift apart.
+        let message = try CrossCertificate.message(
             identityPublicKey: identityPublicKey,
             noiseStaticPublicKey: noiseStaticPublicKey)
         let signature: Data

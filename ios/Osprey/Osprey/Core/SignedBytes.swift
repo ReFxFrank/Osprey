@@ -29,6 +29,14 @@ public enum SignedBytes {
     /// No length prefix is needed: the verifier fixes the algorithm — and
     /// therefore the identity key's length — before it hashes anything.
     /// Rust: `osprey_core::identity::cross_sig_message`.
+    ///
+    /// This is the *offline* mirror, used only by `IdentityVerifier` so a peer's
+    /// bundle can be checked with CryptoKit without a round trip through the
+    /// FFI. Nothing signs from it: `DeviceIdentity` takes its message from
+    /// `CrossCertificate.message(…)`, so the signer and the agent's verifier have
+    /// one definition between them. `SignedBytesTests` asserts the two agree for
+    /// both identity key lengths, because they agree today and would drift
+    /// silently.
     public static func crossCertificate(
         identityPublicKey: Data,
         noiseStaticPublicKey: Data
