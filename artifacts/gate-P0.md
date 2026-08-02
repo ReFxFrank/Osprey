@@ -136,7 +136,7 @@ re-exploiting it rather than by reading the diff.
 | # | Item | Status |
 |---|---|---|
 | 1 | Final product name | **RESOLVED — Osprey** (A1) |
-| 4 | Bundle identifier + APNs key id | **Half resolved** — bundle id `com.refx.osprey` (A2). It must still be registered as an App ID in the Apple Developer portal before a provisioning profile can issue. The APNs `.p8` half is genuinely P8. |
+| 4 | Bundle identifier + APNs key id | **Half resolved** — bundle id `com.osprey.app` (A2). It must still be registered as an App ID in the Apple Developer portal before a provisioning profile can issue. The APNs `.p8` half is genuinely P8. |
 | 5 | Relay domain + VPS | Open, not needed until P5. P0 used a local relay. |
 | 11 | One host or a device list | Open, and **not blocking** — `devices.kind` plus the `pairings` join supports N agents per account without prejudging the UI. |
 | 9, 10, 6, 8, 12, 13 | Indicator style, denylist, sensors, cert, review doc, desktop client | Open, all later phases. |
@@ -157,7 +157,7 @@ re-exploiting it rather than by reading the diff.
    the physical iPhone.
 
 **The one thing I would want decided first:** whether to register
-`com.refx.osprey` as the App ID now. Everything in step 1–4 needs it, and
+`com.osprey.app` as the App ID now. Everything in step 1–4 needs it, and
 changing it after first pairing invalidates Keychain access groups and forces
 every device to re-pair — cheap now, expensive later.
 

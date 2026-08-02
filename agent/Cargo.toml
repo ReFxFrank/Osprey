@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["osprey-core", "osprey-proto", "osprey-svc", "osprey-helper"]
+members = ["osprey-core", "osprey-proto", "osprey-svc", "osprey-helper", "osprey-ffi"]
 
 [workspace.package]
 version = "0.1.0"

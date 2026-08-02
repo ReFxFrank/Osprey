@@ -744,7 +744,7 @@ Brief line 735 requires amendments be recorded here rather than silently diverge
 **The product is `Osprey`.** Approved by the owner, 2026-08-02. Throughout this document, "TETHER" should be read as "Osprey". Concretely: crates are `osprey-core`, `osprey-proto`, `osprey-svc`, `osprey-helper`, `osprey-secure`; the Windows data directory is `%ProgramData%\Osprey\`; the iOS app is "Osprey".
 
 ### A2 — Bundle identifier (closes the P0-blocking half of `TODO(frank)` #4)
-Owner delegated naming authority. Bundle identifier is **`com.refx.osprey`**. This must be registered as an App ID in the Apple Developer portal before a provisioning profile can be issued. The APNs `.p8` key ID half of TODO #4 remains **open** and is genuinely P8, not P0.
+Owner delegated naming authority, then narrowed it: the identifier carries no personal or brand prefix. Bundle identifier is **`com.osprey.app`**. This must be registered as an App ID in the Apple Developer portal before a provisioning profile can be issued. The APNs `.p8` key ID half of TODO #4 remains **open** and is genuinely P8, not P0.
 
 Note carried forward: renaming the bundle ID later invalidates Keychain access groups and therefore forces re-pairing of every device. It is cheap now and expensive after first pairing.
 
