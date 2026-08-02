@@ -69,15 +69,10 @@ impl QrPayload {
     pub fn decode(text: &str) -> Result<Self> {
         let payload: Self = serde_json::from_str(text).map_err(Error::PairingDecode)?;
         if payload.v != QR_PAYLOAD_VERSION {
-            return Err(Error::PairingDecode(serde_json::Error::io(
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!(
-                        "unsupported QR payload version {} (expected {})",
-                        payload.v, QR_PAYLOAD_VERSION
-                    ),
-                ),
-            )));
+            return Err(Error::UnsupportedPayloadVersion {
+                found: payload.v,
+                expected: QR_PAYLOAD_VERSION,
+            });
         }
         payload.agent_identity.verify_self_consistent()?;
         Ok(payload)
@@ -116,7 +111,10 @@ mod tests {
         assert_eq!(back.device_id, payload.device_id);
         assert_eq!(back.agent_identity, payload.agent_identity);
         assert_eq!(back.lan_hints, payload.lan_hints);
-        assert_eq!(back.pairing_secret.as_bytes(), payload.pairing_secret.as_bytes());
+        assert_eq!(
+            back.pairing_secret.as_bytes(),
+            payload.pairing_secret.as_bytes()
+        );
         assert_eq!(back.routing_id(), payload.routing_id());
     }
 
@@ -127,7 +125,10 @@ mod tests {
         let text = payload.encode().expect("encode");
         assert!(matches!(
             QrPayload::decode(&text),
-            Err(Error::PairingDecode(_))
+            Err(Error::UnsupportedPayloadVersion {
+                found: 2,
+                expected: 1
+            })
         ));
     }
 

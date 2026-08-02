@@ -12,6 +12,7 @@ use windows::Win32::Foundation::{LocalFree, HLOCAL};
 use windows::Win32::Security::Cryptography::{
     CryptProtectData, CryptUnprotectData, CRYPTPROTECT_LOCAL_MACHINE, CRYPT_INTEGER_BLOB,
 };
+use zeroize::Zeroize;
 
 use crate::error::KeystoreError;
 use crate::keystore::{check_label, Keystore};
@@ -57,10 +58,18 @@ impl DpapiBlob {
 impl Drop for DpapiBlob {
     fn drop(&mut self) {
         if !self.0.pbData.is_null() {
+            // On the unseal path this buffer holds the device's private keys,
+            // so it is wiped before the allocator is free to hand it out again.
+            // SAFETY: same validity argument as `as_slice`.
+            unsafe {
+                std::slice::from_raw_parts_mut(self.0.pbData, self.0.cbData as usize).zeroize();
+            }
             // SAFETY: pbData came from a successful CryptProtectData /
             // CryptUnprotectData call, which allocates with LocalAlloc.
-            unsafe {
-                let _freed = LocalFree(Some(HLOCAL(self.0.pbData.cast())));
+            let unfreed = unsafe { LocalFree(Some(HLOCAL(self.0.pbData.cast()))) };
+            if !unfreed.0.is_null() {
+                // A leak, not a correctness problem, but it must not be silent.
+                tracing::error!("LocalFree did not release a DPAPI blob");
             }
             self.0.pbData = ptr::null_mut();
             self.0.cbData = 0;

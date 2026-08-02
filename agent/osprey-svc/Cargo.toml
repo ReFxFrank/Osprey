@@ -1,0 +1,40 @@
+[package]
+name = "osprey-svc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Osprey agent console: pairing, steady-state sessions, and local unpair enforcement."
+
+[lib]
+name = "osprey_svc"
+path = "src/lib.rs"
+
+[[bin]]
+name = "osprey-svc"
+path = "src/main.rs"
+
+[dependencies]
+osprey-core = { path = "../osprey-core" }
+osprey-proto = { path = "../osprey-proto" }
+anyhow.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+tracing.workspace = true
+hex = "0.4"
+uuid = { version = "1", features = ["serde", "v4"] }
+base64 = "0.22"
+clap = { version = "4", features = ["derive"] }
+ctrlc = "3"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+qrcode = { version = "0.14", default-features = false }
+if-addrs = "0.15"
+# `rustls` is not an option here: ureq's rustls path pulls `ring`, whose build
+# script shells out to `lib.exe`, which breaks `--target x86_64-pc-windows-msvc`
+# from Linux CI outright (measured: "failed to find tool \"lib.exe\""). This is
+# the same trap osprey-core documents for snow. native-tls resolves to schannel
+# on the shipping Windows target — no C toolchain — and to OpenSSL on the Linux
+# CI host.
+ureq = { version = "3", default-features = false, features = ["native-tls", "json"] }
+
+[dev-dependencies]
+tempfile = "3"

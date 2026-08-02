@@ -73,12 +73,22 @@ fn finish(
             Ok(outcome)
         }
         Err((reason, err)) => {
-            audit.record(&AuditEvent::PairingFailed {
+            // The pairing is already being refused, so the caller is better
+            // served by the reason it failed than by the audit-writer's own
+            // failure. The audit failure is still surfaced, at error level,
+            // rather than dropped.
+            if let Err(audit_err) = audit.record(&AuditEvent::PairingFailed {
                 account_id: context.account_id.clone(),
                 device_id: context.device_id.clone(),
                 reason,
                 detail: detail(&err),
-            })?;
+            }) {
+                tracing::error!(
+                    error = %audit_err,
+                    ?reason,
+                    "failed to write a pairing-failure audit entry"
+                );
+            }
             Err(err)
         }
     }
@@ -86,22 +96,19 @@ fn finish(
 
 /// Check that the bundle a peer sent is internally sound *and* describes the
 /// static the handshake actually authenticated.
-fn pin_from_handshake(
-    message: &[u8],
-    session: &NoiseSession,
-) -> Attempt<(PinnedPeer, PublicIdentity)> {
+fn pin_from_handshake(message: &[u8], session: &NoiseSession) -> Attempt<PinnedPeer> {
     let parsed: IdentityMessage = serde_json::from_slice(message).map_err(|e| {
         (
             PairingFailureReason::MalformedPayload,
             Error::PairingDecode(e),
         )
     })?;
-    let peer = PinnedPeer::pin(&parsed.identity)
-        .map_err(|e| (PairingFailureReason::BadSignature, e))?;
+    let peer =
+        PinnedPeer::pin(&parsed.identity).map_err(|e| (PairingFailureReason::BadSignature, e))?;
     if !peer.matches_handshake_static(session.remote_static()) {
         return Err((PairingFailureReason::StaticMismatch, Error::UnpinnedPeer));
     }
-    Ok((peer, parsed.identity))
+    Ok(peer)
 }
 
 fn encode_identity(identity: &DeviceIdentity) -> Attempt<Vec<u8>> {
@@ -124,7 +131,7 @@ pub fn respond<S: Read + Write>(
     context: &PairingContext,
     audit: &AuditLog,
 ) -> Result<PairingOutcome> {
-    let attempt = respond_inner(stream, identity, offer, context);
+    let attempt = respond_inner(stream, identity, offer);
     finish(audit, context, attempt)
 }
 
@@ -132,7 +139,6 @@ fn respond_inner<S: Read + Write>(
     stream: &mut S,
     identity: &DeviceIdentity,
     offer: &mut PairingOffer,
-    _context: &PairingContext,
 ) -> Attempt<PairingOutcome> {
     if offer.is_consumed() {
         return Err((
@@ -162,7 +168,7 @@ fn respond_inner<S: Read + Write>(
         .run_responder(stream, &reply)
         .map_err(classify_handshake)?;
 
-    let (peer, _) = pin_from_handshake(&request, &session)?;
+    let peer = pin_from_handshake(&request, &session)?;
 
     // First transport-mode message: this is where a wrong PSK finally shows up.
     let confirm = session
@@ -206,8 +212,8 @@ fn initiate_inner<S: Read + Write>(
 ) -> Attempt<PairingOutcome> {
     // The QR is the trust anchor, so its cross-certificate is checked before a
     // single byte goes on the wire.
-    let expected = PinnedPeer::pin(&qr.agent_identity)
-        .map_err(|e| (PairingFailureReason::BadSignature, e))?;
+    let expected =
+        PinnedPeer::pin(&qr.agent_identity).map_err(|e| (PairingFailureReason::BadSignature, e))?;
 
     let local_static = identity.noise_static_secret();
     let handshake = Handshake::new(HandshakeConfig {
@@ -224,7 +230,7 @@ fn initiate_inner<S: Read + Write>(
         .run_initiator(stream, &hello)
         .map_err(classify_handshake)?;
 
-    let (peer, _) = pin_from_handshake(&response, &session)?;
+    let peer = pin_from_handshake(&response, &session)?;
     if peer != expected {
         return Err((
             PairingFailureReason::PeerIdentityMismatch,

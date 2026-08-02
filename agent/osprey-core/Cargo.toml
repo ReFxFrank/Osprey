@@ -10,7 +10,17 @@ thiserror.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true
 tracing.workspace = true
-snow.workspace = true
+# Not workspace-inherited, and not on default features: snow 0.10.0's `std`
+# feature is written `ring/std` instead of `ring?/std`, so it unconditionally
+# enables snow's optional `ring` dependency. That drags a C toolchain into every
+# build (and breaks `--target x86_64-pc-windows-msvc` entirely, since ring's
+# build script wants lib.exe). We use snow's pure-Rust default resolver and
+# never call ring. `default-features = false` is silently ignored on an
+# inherited dependency, hence the direct declaration.
+snow = { version = "0.10", default-features = false, features = [
+    "default-resolver",
+    "default-resolver-crypto",
+] }
 ed25519-dalek.workspace = true
 x25519-dalek.workspace = true
 rand_core.workspace = true

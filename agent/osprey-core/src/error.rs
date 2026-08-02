@@ -124,6 +124,9 @@ pub enum Error {
     #[error("could not decode pairing payload")]
     PairingDecode(#[source] serde_json::Error),
 
+    #[error("QR payload is version {found}, this build speaks version {expected}")]
+    UnsupportedPayloadVersion { found: u32, expected: u32 },
+
     #[error("audit log write failed")]
     Audit(#[source] std::io::Error),
 
@@ -143,6 +146,9 @@ pub enum KeystoreError {
 
     #[error("stored key material is not valid JSON")]
     Decode(#[source] serde_json::Error),
+
+    #[error("key material could not be serialised for storage")]
+    Encode(#[source] serde_json::Error),
 
     #[error("stored key material has an unsupported schema version {found}, expected {expected}")]
     SchemaVersion { found: u32, expected: u32 },

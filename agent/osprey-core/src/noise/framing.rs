@@ -106,7 +106,11 @@ pub(crate) fn split_into_chunks(payload: &[u8]) -> Vec<Vec<u8>> {
         .chunks(MAX_CHUNK_PAYLOAD_LEN)
         .enumerate()
         .map(|(i, part)| {
-            let flag = if i + 1 == total { FLAG_FINAL } else { FLAG_MORE };
+            let flag = if i + 1 == total {
+                FLAG_FINAL
+            } else {
+                FLAG_MORE
+            };
             let mut chunk = Vec::with_capacity(CHUNK_HEADER_LEN + part.len());
             chunk.push(flag);
             chunk.extend_from_slice(part);
@@ -139,7 +143,10 @@ mod tests {
     #[test]
     fn chunk_boundary_math() {
         assert_eq!(MAX_CHUNK_PAYLOAD_LEN, 65518);
-        assert_eq!(split_into_chunks(&vec![7u8; MAX_CHUNK_PAYLOAD_LEN]).len(), 1);
+        assert_eq!(
+            split_into_chunks(&vec![7u8; MAX_CHUNK_PAYLOAD_LEN]).len(),
+            1
+        );
         assert_eq!(
             split_into_chunks(&vec![7u8; MAX_CHUNK_PAYLOAD_LEN + 1]).len(),
             2

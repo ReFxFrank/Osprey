@@ -6,9 +6,7 @@ mod secret;
 
 pub use flow::{initiate, record_unpair, respond, PairingOutcome};
 pub use qr::{QrPayload, QR_PAYLOAD_VERSION};
-pub use secret::{
-    PairingOffer, PairingSecret, RoutingId, DEFAULT_PAIRING_TTL, PAIRING_SECRET_LEN,
-};
+pub use secret::{PairingOffer, PairingSecret, RoutingId, DEFAULT_PAIRING_TTL, PAIRING_SECRET_LEN};
 
 use serde::Serialize;
 

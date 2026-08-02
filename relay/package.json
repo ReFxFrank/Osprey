@@ -1,0 +1,42 @@
+{
+  "name": "@osprey/relay",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Osprey relay — tenant-scoped signaling broker. Never sees plaintext.",
+  "scripts": {
+    "dev": "node --watch src/index.ts",
+    "start": "node src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "node src/db/migrate.ts"
+  },
+  "dependencies": {
+    "@fastify/websocket": "^11.2.0",
+    "drizzle-orm": "^0.44.7",
+    "fastify": "^5.6.2",
+    "postgres": "^3.4.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@types/ws": "^8.18.1",
+    "drizzle-kit": "^0.31.6",
+    "eslint": "^9.39.1",
+    "eslint-plugin-boundaries": "^5.1.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.4",
+    "vitest": "^3.2.4",
+    "ws": "^8.18.3"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "packageManager": "pnpm@10.33.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}

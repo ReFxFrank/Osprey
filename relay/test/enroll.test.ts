@@ -1,0 +1,107 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { fakePeerMaterial, startHarness, TEST_ENROLLMENT_SECRET, type Harness } from './support/harness.ts';
+import { truncateAll } from './support/pg.ts';
+
+/**
+ * Execution plan item 11: implicit account creation (brief §0.1) is an unbounded
+ * minting surface unless it is guarded outside the tenant, because per-account
+ * quotas cannot bound the creation of accounts.
+ */
+describe('agent enrollment guards', () => {
+  let h: Harness;
+
+  beforeEach(async () => {
+    await truncateAll();
+  });
+  afterEach(async () => {
+    if (h !== undefined) await h.close();
+  });
+
+  it('rejects a wrong enrollment secret with 401 and creates nothing', async () => {
+    h = await startHarness();
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/v1/agents/enroll',
+      payload: { enrollmentSecret: 'x'.repeat(40), ...fakePeerMaterial('agent', 'intruder') },
+    });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toMatchObject({ error: { code: 'unauthorized' } });
+  });
+
+  it('rejects a body with no enrollment secret at the schema layer', async () => {
+    h = await startHarness();
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/v1/agents/enroll',
+      payload: fakePeerMaterial('agent', 'intruder'),
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('applies a global per-IP rate limit that no tenant can raise', async () => {
+    h = await startHarness({ OSPREY_ENROLL_RATE_LIMIT_PER_HOUR: '2' });
+    const codes: number[] = [];
+    for (let i = 0; i < 4; i += 1) {
+      const res = await h.app.inject({
+        method: 'POST',
+        url: '/v1/agents/enroll',
+        payload: { enrollmentSecret: TEST_ENROLLMENT_SECRET, ...fakePeerMaterial('agent', `a${i}`) },
+      });
+      codes.push(res.statusCode);
+    }
+    expect(codes).toEqual([201, 201, 429, 429]);
+  });
+
+  it('counts rejected attempts against the rate limit too', async () => {
+    h = await startHarness({ OSPREY_ENROLL_RATE_LIMIT_PER_HOUR: '2' });
+    const bad = await h.app.inject({
+      method: 'POST',
+      url: '/v1/agents/enroll',
+      payload: { enrollmentSecret: 'x'.repeat(40), ...fakePeerMaterial('agent', 'bad') },
+    });
+    expect(bad.statusCode).toBe(401);
+
+    const codes: number[] = [];
+    for (let i = 0; i < 2; i += 1) {
+      const res = await h.app.inject({
+        method: 'POST',
+        url: '/v1/agents/enroll',
+        payload: { enrollmentSecret: TEST_ENROLLMENT_SECRET, ...fakePeerMaterial('agent', `a${i}`) },
+      });
+      codes.push(res.statusCode);
+    }
+    // Rate limiting a brute-force attempt is the entire point; the limiter must
+    // be consumed before the secret is checked, not after.
+    expect(codes).toEqual([201, 429]);
+  });
+
+  it('provisions a quota row with the configured defaults on the new account', async () => {
+    h = await startHarness({ OSPREY_DEFAULT_MAX_DEVICES: '4' });
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/v1/agents/enroll',
+      payload: { enrollmentSecret: TEST_ENROLLMENT_SECRET, ...fakePeerMaterial('agent', 'agent') },
+    });
+    expect(res.statusCode).toBe(201);
+    const { accountId, deviceToken } = res.json() as { accountId: string; deviceToken: string };
+    expect(deviceToken.startsWith(`${accountId}.`)).toBe(true);
+
+    const list = await h.app.inject({
+      method: 'GET',
+      url: '/v1/devices',
+      headers: { authorization: `Bearer ${deviceToken}` },
+    });
+    expect(list.statusCode).toBe(200);
+    expect((list.json() as { devices: unknown[] }).devices).toHaveLength(1);
+  });
+
+  it('refuses to start without an enrollment secret', async () => {
+    await expect(startHarness({ OSPREY_ENROLLMENT_SECRET: '' })).rejects.toThrow(
+      /OSPREY_ENROLLMENT_SECRET/,
+    );
+  });
+
+  it('refuses an enrollment secret short enough to brute force', async () => {
+    await expect(startHarness({ OSPREY_ENROLLMENT_SECRET: 'short' })).rejects.toThrow(/at least 32/);
+  });
+});

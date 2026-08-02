@@ -1,0 +1,29 @@
+# `tls internal` makes Caddy mint the certificate from its own CA rather than
+# reaching for ACME, which is what lets the dev topology match production
+# without a public domain. On the VPS this same file works with a real domain in
+# OSPREY_RELAY_DOMAIN and the `tls internal` line removed.
+
+{
+	admin off
+}
+
+{$OSPREY_RELAY_DOMAIN} {
+	tls internal
+
+	# The relay speaks WebSocket on /v1/agent and /v1/client; reverse_proxy
+	# upgrades those automatically, so no separate matcher is needed.
+	reverse_proxy relay:8080
+
+	# The relay's enrollment rate limit keys on the client IP, which it can only
+	# see because these are set and Fastify runs with trustProxy.
+	header_up X-Forwarded-For {remote_host}
+	header_up X-Forwarded-Proto {scheme}
+
+	log {
+		# Bearer tokens travel in this header; keeping it out of the access log
+		# means a log leak is not also a credential leak.
+		format filter {
+			request>headers>Authorization delete
+		}
+	}
+}

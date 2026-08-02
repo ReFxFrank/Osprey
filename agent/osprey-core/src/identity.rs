@@ -25,6 +25,10 @@ use crate::keystore::Keystore;
 /// for an attacker-chosen static key.
 const CROSS_SIG_CONTEXT: &[u8] = b"osprey/cross-cert/noise-static/v1";
 
+/// Separate domain for fingerprints, so a fingerprint can never collide with a
+/// value that was hashed for some other purpose.
+const FINGERPRINT_CONTEXT: &[u8] = b"osprey/fingerprint/identity/v1";
+
 /// Schema version of the sealed key blob. Bumped only on a layout change; a
 /// mismatch is a hard error rather than a best-effort parse.
 const STORED_IDENTITY_VERSION: u32 = 1;
@@ -49,7 +53,7 @@ pub struct Fingerprint(#[serde(with = "crate::hex32")] pub [u8; 32]);
 impl Fingerprint {
     pub fn of_identity(identity_pub: &[u8; 32]) -> Self {
         let mut h = Sha256::new();
-        h.update(CROSS_SIG_CONTEXT);
+        h.update(FINGERPRINT_CONTEXT);
         h.update(identity_pub);
         Self(h.finalize().into())
     }
@@ -243,10 +247,7 @@ impl DeviceIdentity {
     /// [`PinnedPeer::accept_static`], so rotation does not require re-pairing.
     pub fn rotate_noise_static(&mut self) {
         let identity = self.identity.clone();
-        *self = Self::assemble(
-            identity,
-            StaticSecret::random_from_rng(rand_core::OsRng),
-        );
+        *self = Self::assemble(identity, StaticSecret::random_from_rng(rand_core::OsRng));
     }
 
     /// Seal the private key material into the keystore under [`IDENTITY_LABEL`].
@@ -256,7 +257,10 @@ impl DeviceIdentity {
             identity_secret: self.identity.to_bytes(),
             noise_static_secret: self.noise_static.to_bytes(),
         };
-        let mut json = serde_json::to_vec(&stored).map_err(Error::PairingEncode)?;
+        let mut json = serde_json::to_vec(&stored).map_err(|e| Error::Keystore {
+            label: IDENTITY_LABEL.to_string(),
+            source: crate::error::KeystoreError::Encode(e),
+        })?;
         let result = keystore
             .store(IDENTITY_LABEL, &json)
             .map_err(|source| Error::Keystore {
@@ -269,7 +273,7 @@ impl DeviceIdentity {
 
     /// Load a previously sealed identity, or `None` if the device is unenrolled.
     pub fn load<K: Keystore + ?Sized>(keystore: &K) -> Result<Option<Self>> {
-        let Some(bytes) = keystore
+        let Some(mut bytes) = keystore
             .load(IDENTITY_LABEL)
             .map_err(|source| Error::Keystore {
                 label: IDENTITY_LABEL.to_string(),
@@ -278,11 +282,12 @@ impl DeviceIdentity {
         else {
             return Ok(None);
         };
-        let stored: StoredIdentity =
-            serde_json::from_slice(&bytes).map_err(|e| Error::Keystore {
-                label: IDENTITY_LABEL.to_string(),
-                source: crate::error::KeystoreError::Decode(e),
-            })?;
+        let decoded: std::result::Result<StoredIdentity, _> = serde_json::from_slice(&bytes);
+        bytes.zeroize();
+        let stored = decoded.map_err(|e| Error::Keystore {
+            label: IDENTITY_LABEL.to_string(),
+            source: crate::error::KeystoreError::Decode(e),
+        })?;
         if stored.version != STORED_IDENTITY_VERSION {
             return Err(Error::Keystore {
                 label: IDENTITY_LABEL.to_string(),

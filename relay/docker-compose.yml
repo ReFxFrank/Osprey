@@ -1,0 +1,83 @@
+# Local development relay. Execution plan item 8 puts Caddy in the *local*
+# compose from P0 rather than only on the VPS, for two reasons:
+#
+#  1. iOS App Transport Security blocks plaintext HTTP and blocks connections to
+#     bare IP addresses. A dev relay reachable only over http://<lan-ip> cannot
+#     be talked to by the real app without an ATS exception that then has to be
+#     remembered and removed. Caddy's `internal` CA gives dev the same TLS shape
+#     as production.
+#  2. The pairing hop transits this leg. Noise makes the relay untrusted by
+#     design, so plaintext here leaks no payload — but it does leak metadata,
+#     and there is no reason to practise an insecure topology.
+#
+# Trust the CA on the dev Mac/phone once:
+#   docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt ./caddy-root.crt
+
+name: osprey-relay
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: osprey_owner
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: osprey
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U osprey_owner -d osprey']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # One-shot. Creates the non-owner app role, applies the Drizzle migrations,
+  # then grants that role DML and nothing else. It is the only thing that ever
+  # connects with owner privileges — see sql/roles.sql for why that matters.
+  migrate:
+    build: .
+    command: ['node', 'src/db/migrate.ts']
+    environment:
+      DATABASE_URL_MIGRATOR: postgres://osprey_owner:${POSTGRES_PASSWORD}@postgres:5432/osprey
+      # Sets the runtime role's credential; the role itself is created without one.
+      OSPREY_APP_PASSWORD: ${OSPREY_APP_PASSWORD:?set OSPREY_APP_PASSWORD in .env}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+
+  relay:
+    build: .
+    environment:
+      # Connects as osprey_app, which owns nothing and has neither SUPERUSER nor
+      # BYPASSRLS, so the row-level security policies actually filter.
+      DATABASE_URL: postgres://osprey_app:${OSPREY_APP_PASSWORD:?set OSPREY_APP_PASSWORD in .env}@postgres:5432/osprey
+      OSPREY_ENROLLMENT_SECRET: ${OSPREY_ENROLLMENT_SECRET:?set OSPREY_ENROLLMENT_SECRET in .env}
+      OSPREY_ENROLL_RATE_LIMIT_PER_HOUR: ${OSPREY_ENROLL_RATE_LIMIT_PER_HOUR:-10}
+      OSPREY_LOG_LEVEL: ${OSPREY_LOG_LEVEL:-info}
+      OSPREY_PORT: '8080'
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    expose:
+      - '8080'
+    # Not published to the host: Caddy is the only ingress, so there is no
+    # plaintext port to accidentally point the phone at.
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - '443:443'
+      - '443:443/udp'
+    environment:
+      OSPREY_RELAY_DOMAIN: ${OSPREY_RELAY_DOMAIN:-osprey.localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - relay
+
+volumes:
+  postgres-data:
+  caddy-data:
+  caddy-config:

@@ -50,7 +50,10 @@ fn ikpsk2_pairing_roundtrip_pins_both_sides_and_carries_traffic() {
         host_peer.noise_static_pub,
         fixture.phone.public().noise_static_pub
     );
-    assert_eq!(client_peer.identity_pub, fixture.agent.public().identity_pub);
+    assert_eq!(
+        client_peer.identity_pub,
+        fixture.agent.public().identity_pub
+    );
     assert_eq!(request.as_deref(), Some(&b"ping"[..]));
     assert_eq!(reply.as_deref(), Some(&b"pong"[..]));
 
