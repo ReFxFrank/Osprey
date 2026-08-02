@@ -21,37 +21,39 @@ Do §0 before you start the Mac clock. §2 and §3 can also be done in advance.
 
 ## §0 Pre-flight — do this on Linux/Windows first
 
-### 0.1 There is a path mismatch in the tree. Fix it before the session.
+### 0.1 Where the XCFramework lives — resolved, no action needed
 
-As of this writing the XcodeGen spec and the build script disagree about where
-the XCFramework lives, and about what it is called:
+An earlier draft of this runbook flagged a mismatch between the XcodeGen spec and
+the build script. It has been fixed; the paths below are the settled answer.
 
-| | Path | Name |
-|---|---|---|
-| `ios/Osprey/project.yml` expects | `<repo>/build/OspreyFFI.xcframework`, `<repo>/build/bindings/osprey_ffi.swift` | `OspreyFFI` |
-| `scripts/build-xcframework.sh` writes | `<repo>/agent/target/xcframework/Osprey.xcframework`, `<repo>/agent/target/xcframework/bindings/osprey_ffi.swift` | `Osprey` |
+| Step | Location |
+|---|---|
+| `scripts/build-xcframework.sh` writes | `agent/target/xcframework/Osprey.xcframework` and `agent/target/xcframework/bindings/osprey_ffi.swift` |
+| the build then stages into | `ios/Osprey/Frameworks/` |
+| `ios/Osprey/project.yml` references | `Frameworks/Osprey.xcframework` and `Frameworks/osprey_ffi.swift` |
 
-There is also an empty `ios/Osprey/Frameworks/` directory — a third candidate
-location. Only one can be right.
+`ios/Osprey/Frameworks/` is gitignored — it holds build output, not source.
+`.github/workflows/ios.yml` performs the staging copy.
 
-This will not fail loudly. `project.yml` marks the bindings source
-`optional: true`, so XcodeGen will happily generate a project with **no Rust
-bindings compiled in**, and you get several hundred `cannot find type
-'NoiseHandshake' in scope`-class errors plus `framework not found OspreyFFI` on
-the first build — an hour into the session, for a one-line reason. Verify the
-two agree before you boot the Mac:
+Two things worth knowing, because both fail quietly rather than loudly:
+
+- The binding is staged into `Frameworks/`, **not** `Osprey/Generated/`.
+  `proto/generate.ts` deletes every `.swift` in the generated directory it did
+  not itself emit, so a UniFFI binding parked there would vanish on the next
+  `pnpm generate` and break the build for a reason that looks unrelated.
+- `project.yml` marks the binding source `optional: true`, so if the staging step
+  is skipped XcodeGen still produces a project — one with no Rust bindings
+  compiled in, yielding a wall of `cannot find type 'NoiseHandshake' in scope`.
+  If you see that, the staging copy did not run.
+
+Sanity check before booting the Mac:
 
 ```bash
 cd /path/to/Osprey
-scripts/build-xcframework.sh --partial     # prints exactly what it produced
+scripts/build-xcframework.sh --partial   # prints exactly what it produced
 ls -R agent/target/xcframework
-grep -n "build/" ios/Osprey/project.yml
+grep -n "Frameworks/" ios/Osprey/project.yml
 ```
-
-`TODO(frank):` decide which location is canonical — repo-root `build/` (a
-conventional, gitignored output dir that a CI job can publish) or
-`agent/target/xcframework/` (inside Cargo's target dir, so `cargo clean` wipes
-it). Both work; they just have to be the same string in both files.
 
 ### 0.2 Build the Linux half and keep the output
 
@@ -70,13 +72,20 @@ generated bindings against a consumer that walks the whole pairing sequence. It
 cannot prove linking or anything about CryptoKit/Security, but it catches
 Rust-signature drift before the Mac clock starts.
 
-### 0.3 swiftlint has no configuration file
+### 0.3 swiftlint configuration — settled
 
-Gate P0 criterion 7 requires `swiftlint` clean. There is **no `.swiftlint.yml`**
-anywhere in the repo, so swiftlint will run with its built-in default rule set.
-That is a legitimate way to satisfy the criterion, but it is a choice nobody has
-made explicitly. Decide before the session, because adding a config file
-afterwards changes what "clean" meant.
+Gate P0 criterion 7 requires `swiftlint` clean, which is meaningless without a
+defined rule set. `.swiftlint.yml` now exists at the repo root, so "clean" has a
+fixed meaning and cannot be quietly redefined by adding a config later.
+
+It runs SwiftLint's default rules over `ios/` only, with two exclusions that are
+deliberate rather than convenient: `ios/Osprey/Osprey/Generated/` (emitted by
+`proto/generate.ts` — lint findings there are bugs in the *generator*, to be
+fixed in `proto/lib/emit-swift.ts`, and hand-editing generated files is forbidden
+by CLAUDE.md) and `ios/Osprey/Frameworks/` (UniFFI output, not our source).
+
+Run it with `swiftlint --strict` so warnings fail too; otherwise "clean" quietly
+means "no errors, warnings ignored".
 
 ---
 
@@ -135,34 +144,37 @@ rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
 
 ---
 
-## §2 Register the App ID `com.ospreyremote.app`
+## §2 Register the App ID — ✅ DONE 2026-08-02
 
-Do this **now**, and do it before you write a single line of signing config.
+**Already complete. Skip to §3.** Recorded here because the outcome matters and
+the failure is worth not repeating.
 
-> **Bundle identifiers are globally unique across the entire App Store.** If
-> `com.ospreyremote.app` is already taken by someone else, you find out here, in thirty
-> seconds, and pick a variant. If you find out later, the cost is not cosmetic:
-> per amendment A21, changing the bundle id after first pairing **invalidates
-> Keychain access groups and forces every paired device to re-pair**. The
-> identity key, the Noise static and the host pin all live in the keychain under
-> that identity.
+| | |
+|---|---|
+| Bundle ID | `com.ospreyremote.app` (Explicit) |
+| Description | Osprey Remote Manager |
+| Team ID | `FM8Z8BA64H` — this is the `APPLE_TEAM_ID` CI secret |
+| Capabilities | none enabled, which is correct for P0 |
 
-1. Sign in at <https://developer.apple.com/account>.
-2. **Certificates, Identifiers & Profiles** → **Identifiers** → **+**.
-3. Choose **App IDs** → **App**.
-4. Description: `Osprey`. Bundle ID: select **Explicit** and enter
-   `com.ospreyremote.app`. (Explicit, not wildcard — a wildcard App ID cannot carry
-   the capabilities Osprey needs from P8 onward.)
-5. **Capabilities: enable nothing for P0.** Push Notifications arrives at P8 and
-   can be added to this same App ID later without changing the identifier.
-6. Register.
+**`com.osprey.app` was tried first and rejected as unavailable.** "Osprey" is a
+common trade name, and a wildcard App ID of the form `com.osprey.*` blocks every
+explicit identifier beneath it — so no `com.osprey.<anything>` variant would have
+worked. Do not retry that prefix.
 
-Xcode's automatic signing *can* create the App ID for you on first build. Do it
-manually anyway — automatic creation surfaces a name collision as an opaque
-signing error at the worst moment, and the collision is the one thing here you
-cannot fix cheaply later. While you are in the portal, register the iPhone (§5.1
-explains how to read the UDID from the Windows PC): **Devices** → **+** →
-platform iOS, paste the UDID, name it.
+Doing this before any signing configuration existed is what made the collision
+cheap. Per amendment A21, changing the bundle id after first pairing
+**invalidates Keychain access groups and forces every paired device to
+re-pair** — the identity key, the Noise static and the host pin all live in the
+keychain under that identity.
+
+Still outstanding in the portal: **register the iPhone.** **Devices** → **+** →
+platform iOS, paste the UDID, name it. §5.1 explains how to read the UDID from
+the Windows PC. Without it, no development profile will install on the device.
+
+Xcode's automatic signing *can* mint an App ID for you on first build. It was
+done by hand anyway, because automatic creation surfaces a name collision as an
+opaque signing error at the worst possible moment — and as it turned out, there
+was a collision.
 
 ---
 

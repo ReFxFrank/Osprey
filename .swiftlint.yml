@@ -1,0 +1,65 @@
+# SwiftLint configuration.
+#
+# Gate P0 criterion 7 requires "swiftlint clean", which means nothing without a
+# fixed rule set — so this file exists to pin what "clean" is. Run it as
+#
+#     swiftlint --strict
+#
+# so warnings fail as well; otherwise "clean" quietly degrades to "no errors".
+
+included:
+  - ios
+
+excluded:
+  # Emitted by proto/generate.ts from proto/messages.toml. A lint finding here is
+  # a bug in the generator, to be fixed in proto/lib/emit-swift.ts — hand-editing
+  # generated files is forbidden (CLAUDE.md), and any edit would be overwritten
+  # by the next `pnpm generate` anyway.
+  - ios/Osprey/Osprey/Generated
+  # UniFFI output staged by scripts/build-xcframework.sh. Not our source, and not
+  # committed.
+  - ios/Osprey/Frameworks
+
+# CLAUDE.md caps files at 600 lines, so SwiftLint should enforce the same bound
+# rather than its more permissive default.
+file_length:
+  warning: 600
+  error: 600
+
+# The default 120-column warning is fine; the 200-column error is not, since
+# nothing in this codebase has a reason to run that long.
+line_length:
+  warning: 120
+  error: 160
+  ignores_comments: false
+  ignores_urls: true
+
+identifier_name:
+  # Cryptographic code legitimately uses short names for well-known quantities
+  # (e, s, es, se) that mirror the Noise specification's own notation. Renaming
+  # them to satisfy a linter would make the code harder to check against the spec.
+  excluded:
+    - e
+    - s
+    - id
+    - ok
+
+# Opt-in rules worth having in a codebase that handles key material and network
+# input, where a silent failure is the expensive kind.
+opt_in_rules:
+  - force_unwrapping
+  - empty_count
+  - closure_spacing
+  - explicit_init
+  - first_where
+  - overridden_super_call
+  - redundant_nil_coalescing
+  - unneeded_parentheses_in_closure_argument
+
+# force_try and force_unwrapping are errors, not warnings: the Swift analogue of
+# CLAUDE.md's rule against unwrap()/expect() on any path reachable by remote
+# input. A malformed network message must never crash the client.
+force_try:
+  severity: error
+force_cast:
+  severity: error
