@@ -37,25 +37,59 @@ pub struct RelayTarget {
     pub token: DeviceToken,
 }
 
+/// Live view of the attachment.
+///
+/// Exists so reachability is *observable* rather than only loggable: a
+/// controller asking "is my agent reachable through the relay" needs this, and
+/// so does any test asserting that a dropped link came back on its own.
+#[derive(Debug, Default)]
+pub struct RelayStatus {
+    attached: AtomicBool,
+    attachments: std::sync::atomic::AtomicU64,
+}
+
+impl RelayStatus {
+    /// True while a link is up.
+    pub fn is_attached(&self) -> bool {
+        self.attached.load(Ordering::Relaxed)
+    }
+
+    /// How many times a link has been established since start.
+    ///
+    /// A reconnect is this going up, which is what distinguishes "never
+    /// dropped" from "dropped and recovered".
+    pub fn attachments(&self) -> u64 {
+        self.attachments.load(Ordering::Relaxed)
+    }
+}
+
 /// Run the connect/serve/reconnect cycle until `running` goes false.
-pub fn spawn(target: RelayTarget, running: Arc<AtomicBool>) -> Option<JoinHandle<()>> {
+pub fn spawn(
+    target: RelayTarget,
+    running: Arc<AtomicBool>,
+    status: Arc<RelayStatus>,
+) -> Option<JoinHandle<()>> {
     std::thread::Builder::new()
         .name("osprey-relay".to_owned())
-        .spawn(move || supervise(&target, &running))
+        .spawn(move || supervise(&target, &running, &status))
         .map_err(|err| tracing::error!(error = %err, "could not start the relay supervisor"))
         .ok()
 }
 
-fn supervise(target: &RelayTarget, running: &AtomicBool) {
+fn supervise(target: &RelayTarget, running: &AtomicBool, status: &RelayStatus) {
     let mut backoff = Backoff::new(BACKOFF_BASE, BACKOFF_CAP);
 
     while running.load(Ordering::Relaxed) {
         match attach(target) {
             Ok(mut live) => {
                 tracing::info!(relay = %target.base_url, "attached to the relay");
+                status.attached.store(true, Ordering::Relaxed);
+                status.attachments.fetch_add(1, Ordering::Relaxed);
+
                 let started = Instant::now();
                 let outcome = pump(&mut live, running);
                 live.close();
+                status.attached.store(false, Ordering::Relaxed);
 
                 // Only a link that lasted counts as proof the relay is well;
                 // otherwise a flapping endpoint would keep resetting the delay.
@@ -194,10 +228,13 @@ mod tests {
         assert!(attach(&target).is_err());
 
         let running = Arc::new(AtomicBool::new(true));
-        let handle = spawn(target, Arc::clone(&running)).expect("spawn");
+        let status = Arc::new(RelayStatus::default());
+        let handle = spawn(target, Arc::clone(&running), Arc::clone(&status)).expect("spawn");
         std::thread::sleep(Duration::from_millis(300));
         // Still alive and retrying rather than having given up.
         assert!(!handle.is_finished(), "the supervisor abandoned a retryable failure");
+        assert!(!status.is_attached());
+        assert_eq!(status.attachments(), 0, "nothing was ever reachable to attach to");
         running.store(false, Ordering::Relaxed);
         handle.join().expect("join");
     }

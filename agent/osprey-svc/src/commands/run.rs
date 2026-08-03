@@ -87,8 +87,9 @@ pub fn execute(
 
     // An agent that has never enrolled is LAN-only by design (amendment A6),
     // so no relay is not a failure — it is the pairing mode the P0 gate used.
+    let relay_status = Arc::new(supervisor::RelayStatus::default());
     let relay_supervisor = match relay_target(host) {
-        Some(target) => supervisor::spawn(target, Arc::clone(&running)),
+        Some(target) => supervisor::spawn(target, Arc::clone(&running), Arc::clone(&relay_status)),
         None => {
             tracing::info!("no relay enrolment; serving the local network only");
             None
