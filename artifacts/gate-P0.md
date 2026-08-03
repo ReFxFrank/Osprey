@@ -1,24 +1,26 @@
 # Gate Report — P0: Foundations
 
 *Osprey (formerly codenamed TETHER). Report format per brief §15.*
-*Last updated after the Windows-native verification pass of 2026-08-02. All
-prior measurements were taken on Linux; this pass re-ran the agent suite,
-clippy, codegen reproducibility, relay lint/typecheck and the mDNS test on the
-actual target platform for the first time.*
+*Final: updated 2026-08-03 after the physical-device run closed the last two
+half-criteria. Measurement provenance — original pass on Linux; 2026-08-02
+Windows-native pass on the target machine; 2026-08-02 cloud-Mac session
+(first Apple-SDK compile, Simulator tests, swiftlint, signed IPA); 2026-08-03
+device run (pairing, encrypted ping/pong, key persistence).*
 
 ## Status
 
-**FAIL**
+**PASS**
 
-A scope failure, not a defect failure. Everything buildable without a Mac is now
-built and verified: the Windows agent, the relay, the protocol layer, the
-Rust↔Swift bridge, and the complete iOS client **source**. What is missing is
-verification: **no Swift in this repository has ever been compiled against the
-Apple SDK, and nothing has run on the physical iPhone.**
+Every criterion is now measured, on the hardware it was specified for. The
+final two half-criteria closed on 2026-08-03 (UTC) with the development-signed
+app on the physical iPhone pairing against the agent on the Windows host over
+the real LAN: QR scan → PSK handshake → pinned fingerprints matching on both
+ends → encrypted ping/pong at 14 ms → keys and pairing surviving a force-quit
+relaunch. Evidence: `artifacts/P0/device-run-2026-08-03.md`.
 
-Three gate criteria therefore remain unevaluated, including criterion 1, which is
-the headline of the phase. Marking those green would put a checkmark over
-untested code, so the gate stays FAIL until the cloud-Mac session closes them.
+All deviations from the brief were approved in advance and are recorded as
+amendments A1–A22 in the brief itself; what shipped implements the brief as
+amended.
 
 Nothing below is estimated. Every number came from a command run in this
 environment and observed.
@@ -27,13 +29,13 @@ environment and observed.
 
 | # | Criterion (verbatim from brief) | Result | Evidence |
 |---|---|---|---|
-| 1 | Phone scans QR, pairs, exchanges an authenticated encrypted `ping`/`pong` over the local network. | **NOT MEASURED** | Still requires the phone, so it stays unmeasured — but substantially de-risked since this report was first written. The iOS Swift sources were linked against the real Rust library on Linux and the XCTest suite run against a live `osprey-core` responder: 46 tests, 0 failures, driving genuine IKpsk2 handshakes through the same UniFFI surface the phone will use. Agent-side, `pair_then_session_then_unpair_blocks_the_next_connection` covers pairing, session, ping/pong and unpair over real TCP. What remains unproven is the Apple-SDK half — Secure Enclave, camera, Keychain — and the app has never been compiled by Xcode. |
-| 2 | Keys survive agent restart and app restart. | **PARTIAL** | Agent half PASS — `keystore_survives_a_save_load_cycle` reopens the keystore as a restart proxy and asserts the reloaded bundle is byte-identical and still verifies. As of 2026-08-02 the test is backend-generic and on Windows runs against the **shipping DPAPI backend** (`CRYPTPROTECT_LOCAL_MACHINE` seal/unseal round-trip); before that it had only ever exercised the Unix dev backend. App half NOT MEASURED: Keychain/Secure Enclave persistence needs the device. |
+| 1 | Phone scans QR, pairs, exchanges an authenticated encrypted `ping`/`pong` over the local network. | **PASS** | Measured on the physical iPhone, 2026-08-03. QR scanned from the host console, `pairing_succeeded` audited with the pinned controller fingerprint, fingerprints compared and matching on both ends, then an encrypted session (`session established … fingerprint=18f9-b86c-b21d-0d87`) with ping/pong at **14 ms** round trip on the LAN. Full evidence in `artifacts/P0/device-run-2026-08-03.md`. |
+| 2 | Keys survive agent restart and app restart. | **PASS** | Agent half — `keystore_survives_a_save_load_cycle`, backend-generic since 2026-08-02, runs against the **shipping DPAPI backend** on Windows (`CRYPTPROTECT_LOCAL_MACHINE` seal/unseal round-trip). App half — measured on the device 2026-08-03: force-quit from the app switcher and relaunch showed the same device fingerprint and paired host, then opened a session with no re-pairing (Secure Enclave key blob, X25519 static and host pin all reloaded from the keychain). |
 | 3 | Unpair works from both sides and immediately blocks traffic. | **PASS** | Both directions. Agent side: `osprey-svc unpair`. Peer side: `pair.revoke` verified against the pinned identity with a freshness window, single-use nonce, and issuer/target binding; wrong-identity, replayed-nonce and stale-timestamp cases all rejected. Enforcement is local and authoritative — the relay is never the enforcement point. |
 | 4 | Tampering with a handshake byte causes a clean logged failure, not a panic. | **PASS** | Byte-flip tests across handshake offsets return typed errors and write an audit entry. `#![deny(clippy::unwrap_used, clippy::expect_used)]` is active on the crypto crates and was proven to fire by inserting a deliberate `unwrap()`. |
 | 5 | Cross-tenant test suite green: two accounts, every endpoint, 404 on foreign resources. **Report the endpoint count.** | **PASS — 8 endpoints** | The suite enumerates the live Fastify route table and fails if any registered route lacks a cross-tenant assertion, and also fails on assertions naming routes that no longer exist. One route is explicitly exempt (`GET /healthz`, a constant-returning liveness probe). |
 | 6 | No raw `db.` access outside `src/repo/` — lint rule active and passing. | **PASS** | Two independent mechanisms (string-pattern `no-restricted-imports` + resolver-based `eslint-plugin-boundaries`). Proven to *fire*, not merely be configured: a violating file is planted and the error asserted, including in a nested subdirectory. |
-| 7 | `cargo clippy -- -D warnings` and `swiftlint` clean. | **PARTIAL** | clippy PASS on the Linux host, on cross-checked `x86_64-pc-windows-msvc`, and — as of 2026-08-02 — **natively on the Windows target machine** (both required invocations, exit 0, all targets). swiftlint **NOT MEASURED** — needs the Mac session. |
+| 7 | `cargo clippy -- -D warnings` and `swiftlint` clean. | **PASS** | clippy PASS on the Linux host, on cross-checked `x86_64-pc-windows-msvc`, and natively on the Windows target machine (both required invocations, exit 0, all targets). swiftlint PASS — `swiftlint lint --config .swiftlint.yml --strict` (0.65.0, macOS 26.4.1) exits 0 with 0 violations across 43 files at commit `5f2f569`. The first real run found 24 violations, fixed in `13015ce`/`5f2f569`; one justified in-code disable (`PairingFlow.run`, which mirrors the Rust core input-for-input). |
 | + | *(amendment A17)* Against a deliberately malicious relay, key substitution / self-redemption / token replay all fail closed. | **PASS** | Re-attacked after remediation: a relay holding only `routing_id` cannot complete the PSK handshake; replayed and expired tokens are refused; redeem is single-use and atomic. |
 
 ## Measurements
@@ -59,6 +61,36 @@ environment and observed.
 | Largest source file | 563 lines (`osprey-svc/src/state.rs`) — under the 600 limit |
 | Codegen reproducibility | regenerating produces an empty git diff |
 | Agent idle CPU / RSS | **NOT MEASURED** — a P1 criterion, not P0 |
+
+### Physical-device run (2026-08-03, iPhone + Windows host on one LAN)
+
+| Metric | Value |
+|---|---|
+| QR pairing end to end | **PASS** — `pairing_succeeded` audited 00:52:54Z, controller fingerprint `18f9b86c…` pinned |
+| Fingerprint comparison host↔phone | matching (operator-verified) |
+| Encrypted ping round trip, LAN | **14 ms** (app HUD, 2 pings) |
+| Keys/pairing survive app force-quit + relaunch | **PASS** — same fingerprint, same host, session without re-pairing |
+| iOS prerequisites hit | Developer Mode enable + restart; camera and local-network permissions granted |
+
+### Cloud-Mac session (2026-08-02, MacinCloud, Xcode 26.5 / macOS 26.4.1)
+
+The first time any Swift in this repository met the Apple SDK:
+
+| Metric | Value |
+|---|---|
+| First Apple-SDK compile (Simulator, Debug) | **BUILD SUCCEEDED** — first attempt, zero source changes needed |
+| XCTest suite in the Simulator | **46 passed, 0 failed** — matching the Linux-linked run exactly |
+| `swiftlint --strict` (criterion 7) | **exit 0, 0 violations** in 43 files, after fixing the 24 the first run surfaced |
+| Signed device archive (`-allowProvisioningUpdates`, automatic signing) | **ARCHIVE SUCCEEDED** — certificate and profile minted automatically |
+| Development IPA export (`method: debugging`) | **EXPORT SUCCEEDED** — `~/build/ipa/Osprey.ipa` on the Mac |
+| XCFramework build on the Mac | all 5 steps; fat simulator slice `x86_64 arm64` |
+
+Session friction worth recording: the MacinCloud home directory is a symlink
+onto `/Volumes/Macintosh_HD`, which broke `uniffi_bindgen`'s askama templates
+until `CARGO_HOME` and the working directory were pinned to physical paths; and
+XcodeGen invoked through a bare symlink cannot find its SettingPresets, which
+silently generates a project with no default build settings (empty
+`PRODUCT_NAME`) — a wrapper script fixes it.
 
 ### Windows-native pass (2026-08-02, the target machine)
 
@@ -189,6 +221,22 @@ original attack rather than by re-reading the diff.
     pool close in `finally`, the exit codes). The relay deploys on Linux, so
     the production signal path remains covered where it actually runs.
 
+### Found on the device run (2026-08-03)
+
+14. **A deliberate disconnect is logged as an error.** Tapping Disconnect in the
+    app (or backgrounding it) surfaces on the host as
+    `session ended with an error … could not read from the noise session` at
+    WARN. The session teardown itself is correct; the diagnosis is wrong — an
+    operator-initiated close should be recognized as a clean end (the app sends
+    `bye`, or the read returns clean EOF), not reported as a read failure.
+    Cosmetic now; it will matter in P1 when the service starts counting
+    reconnects and in §9.3's 30-second background grace window. Not fixed in
+    P0 — noted for P1's session-lifecycle work.
+15. **The app ships no icon.** Installs and runs with the placeholder blank
+    icon. Irrelevant to every P0 criterion; becomes blocking at the first
+    TestFlight upload (App Store Connect requires the 1024-pt icon). P9
+    packaging work.
+
 ### Carried forward — will bite later
 
 - **iOS measurement has no home yet.** Instruments is macOS-only and cloud Macs
@@ -216,27 +264,18 @@ original attack rather than by re-reading the diff.
 
 ## Ready for P1?
 
-**No — finish P0 first.** The remaining work is bounded, and all of it needs the
-cloud Mac. Follow `docs/ios-build.md`.
+**Yes.** Every criterion is measured and green; the discovered problems above
+are recorded with owners (P1 for session-lifecycle diagnosis, P5 for the iOS
+measurement-harness plan, P9 for the icon) rather than left implicit.
 
-1. ~~Register the App ID and the device~~ — **done 2026-08-02**.
-   `com.ospreyremote.app` (Explicit) and the iPhone's UDID are both registered
-   under Team ID `FM8Z8BA64H`, so the portal side is complete and Xcode's
-   automatic signing can mint the certificate and profile on the Mac.
-2. `cd ios/Osprey && xcodegen generate`.
-3. `scripts/build-xcframework.sh` — note the Rust static libraries **and** the
-   UniFFI Swift bindings already build on Linux, so only lipo,
-   `xcodebuild -create-xcframework`, the Swift build, signing and upload need the
-   Mac. That is why the session should be short.
-4. Fix whatever the first real Swift compile surfaces. Expect some churn: 47
-   Swift files have been type-checked only in the narrow sense the Apple SDK's
-   absence permits.
-5. Install to the physical iPhone — fastest loop is a development-signed IPA
-   installed from the Windows PC with Sideloadly over USB; TestFlight for
-   release candidates.
-6. Measure criteria 1, 2 (app half) and 7 (swiftlint) **on the device**. The
-   Simulator cannot substitute: it has neither a camera nor a Secure Enclave.
+P1 builds: `osprey-svc` as a real Windows service (install/start/boot/restart
+semantics), the session-0 → session-1 helper spawn with the SYSTEM-only pipe,
+helper lifecycle with crash-loop backoff, `PerMonitorV2` DPI manifest, M-01
+metrics with the 24 h ring buffer, and the iOS dashboard with live charts.
 
-**The one thing to decide first:** nothing is now blocking. The identifier is
-registered, so the next session can go straight to the Mac and work through
-`docs/ios-build.md` from §3.
+**The one thing to decide first:** `TODO(frank)` #11 — one host, or a device
+list from the start? The register marks it as blocking P1's UI shape: the
+dashboard the phone shows at P1's gate is either a single machine's screen or
+a list-then-detail flow, and reworking that later touches every management
+screen. The schema already supports N agents per account either way; this is
+purely a product-surface decision.
