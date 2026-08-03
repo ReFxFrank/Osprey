@@ -24,6 +24,13 @@ public enum PairingFlow {
     /// verified — that check is the trust anchor and it happens before a single
     /// byte goes on the wire, so this function only has to prove that the peer
     /// on the socket *is* that identity.
+    ///
+    /// Six parameters, deliberately: this signature mirrors
+    /// `osprey_core::pairing::flow::initiate_inner` input-for-input, and that
+    /// 1:1 correspondence is what lets the two implementations be audited
+    /// against each other. Grouping them into structs would satisfy the lint
+    /// at the cost of the property this file exists to preserve.
+    // swiftlint:disable:next function_parameter_count
     public static func run(
         stream: any ByteStream,
         engine: any NoiseEngine,

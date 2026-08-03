@@ -65,7 +65,7 @@ final class QRPayloadTests: XCTestCase {
             payload.dialOrder,
             [
                 LanEndpoint(host: "10.0.0.4", port: 47010, isIPv6: false),
-                LanEndpoint(host: "fd00::1", port: 47010, isIPv6: true),
+                LanEndpoint(host: "fd00::1", port: 47010, isIPv6: true)
             ])
     }
 
@@ -85,7 +85,7 @@ final class QRPayloadTests: XCTestCase {
     func testEndpointsSurviveAStorageRoundTrip() throws {
         let hints = [
             LanEndpoint(host: "10.0.0.4", port: 47010, isIPv6: false),
-            LanEndpoint(host: "fd00::1", port: 47010, isIPv6: true),
+            LanEndpoint(host: "fd00::1", port: 47010, isIPv6: true)
         ]
         let encoded = try JSONEncoder().encode(hints)
         XCTAssertEqual(try JSONDecoder().decode([LanEndpoint].self, from: encoded), hints)

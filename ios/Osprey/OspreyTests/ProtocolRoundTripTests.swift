@@ -27,7 +27,7 @@ final class ProtocolRoundTripTests: XCTestCase {
                     issuerDeviceId: deviceID, revokedDeviceId: deviceID,
                     issuedAt: 1_700_000_000_000,
                     nonce: Data(repeating: 0x5A, count: 32),
-                    signature: Data(repeating: 0x7B, count: 70))),
+                    signature: Data(repeating: 0x7B, count: 70)))
         ]
 
         for body in bodies {
@@ -58,7 +58,7 @@ final class ProtocolRoundTripTests: XCTestCase {
                 issuerDeviceId: UUID(), revokedDeviceId: UUID(), issuedAt: 0,
                 nonce: Data(repeating: 0x00, count: 32),
                 signature: Data([0x01, 0x02, 0x03])))
-        let text = String(decoding: raw, as: UTF8.self)
+        let text = try XCTUnwrap(String(bytes: raw, encoding: .utf8))
         XCTAssertTrue(
             text.contains("\"signature\":\"AQID\""),
             "the generated bodies must encode `bytes` as padded standard base64")

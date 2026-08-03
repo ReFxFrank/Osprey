@@ -61,8 +61,7 @@ public final class TCPByteStream: ByteStream, @unchecked Sendable {
     }
 
     private func start(timeout: TimeInterval) async throws {
-        try await withCheckedThrowingContinuation {
-            (continuation: CheckedContinuation<Void, any Error>) in
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
             let once = ResumeOnce<Void>(continuation)
             connection.stateUpdateHandler = { state in
                 switch state {
@@ -101,8 +100,7 @@ public final class TCPByteStream: ByteStream, @unchecked Sendable {
 
     public func write(_ data: Data) async throws {
         guard !data.isEmpty else { return }
-        try await withCheckedThrowingContinuation {
-            (continuation: CheckedContinuation<Void, any Error>) in
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
             connection.send(
                 content: data,
                 completion: .contentProcessed { error in
@@ -118,14 +116,12 @@ public final class TCPByteStream: ByteStream, @unchecked Sendable {
 
     public func read(upTo maxCount: Int) async throws -> Data? {
         guard maxCount > 0 else { throw TCPStreamError.badReadLength(maxCount) }
-        return try await withCheckedThrowingContinuation {
-            (continuation: CheckedContinuation<Data?, any Error>) in
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data?, any Error>) in
             let once = ResumeOnce<Data?>(continuation)
             // `minimumIncompleteLength: 1` is what makes this a byte pump rather
             // than a framer: it returns as soon as anything has arrived, and the
             // Rust core decides when it has a whole message.
-            connection.receive(minimumIncompleteLength: 1, maximumLength: maxCount) {
-                data, _, isComplete, error in
+            connection.receive(minimumIncompleteLength: 1, maximumLength: maxCount) { data, _, isComplete, error in
                 if let error {
                     once.resume(.failure(TCPStreamError.receiveFailed(String(describing: error))))
                     return

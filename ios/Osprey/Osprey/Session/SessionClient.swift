@@ -41,7 +41,7 @@ public struct SessionClient: Sendable {
     public func ping(sequence: UInt64) async throws -> PingRoundTrip {
         let id = UUID()
         let sentAt = Self.nowMilliseconds()
-        let reply = try await exchange(id: id, ts: sentAt, body: PingBody(seq: sequence))
+        let reply = try await exchange(id: id, timestamp: sentAt, body: PingBody(seq: sequence))
         guard case .pong(let pong) = reply.body else {
             throw SessionError.unexpectedReply(expected: .pong, found: reply.t)
         }
@@ -100,10 +100,10 @@ public struct SessionClient: Sendable {
     /// One request, one correlated response.
     private func exchange<Body: OspreyMessageBody>(
         id: UUID,
-        ts: Int64? = nil,
+        timestamp: Int64? = nil,
         body: Body
     ) async throws -> DecodedEnvelope {
-        let sentAt = ts ?? Self.nowMilliseconds()
+        let sentAt = timestamp ?? Self.nowMilliseconds()
         let request = try OspreyProtocol.encode(id: id, ts: sentAt, body: body)
         try await session.send(request)
         let raw = try await session.receiveRequired()

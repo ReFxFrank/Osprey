@@ -10,8 +10,7 @@ import Foundation
 /// exposed only to the preview layer, which reads it on the main thread as
 /// AVFoundation requires.
 public final class CameraPairingPayloadSource: NSObject, PairingPayloadSource,
-    AVCaptureMetadataOutputObjectsDelegate, @unchecked Sendable
-{
+    AVCaptureMetadataOutputObjectsDelegate, @unchecked Sendable {
     /// Read on the main thread by `CameraPreviewView`. Handing the session to a
     /// preview layer is the documented way to render it and does not mutate it.
     public let session = AVCaptureSession()
@@ -41,8 +40,7 @@ public final class CameraPairingPayloadSource: NSObject, PairingPayloadSource,
         guard await Self.requestCameraAccess() else {
             throw ScannerError.cameraAccessDenied
         }
-        try await withCheckedThrowingContinuation {
-            (continuation: CheckedContinuation<Void, any Error>) in
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
             queue.async {
                 do {
                     try self.configureIfNeeded()
