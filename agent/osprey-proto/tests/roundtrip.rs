@@ -101,8 +101,22 @@ fn samples() -> Vec<Body> {
             disk_labels: vec!["C:".to_owned(), "D:".to_owned()],
             disk_used_bytes: vec![500_000_000_000, 0],
             disk_total_bytes: vec![1_000_000_000_000, 2_000_000_000_000],
-            net_rx_bytes_per_sec: 1_048_576,
-            net_tx_bytes_per_sec: 65_536,
+            net_rx_bytes_per_sec: Some(1_048_576),
+            net_tx_bytes_per_sec: Some(65_536),
+        }),
+        // Throughput the agent could not determine for the interval. Absent is
+        // a different claim from zero and must survive the round trip as one.
+        Body::MetricsTick(MetricsTickBody {
+            sub: Uuid::from_u128(43),
+            ts: 1_738_000_000_000,
+            cpu_percent: 0.0,
+            mem_used_bytes: 1,
+            mem_total_bytes: 2,
+            disk_labels: Vec::new(),
+            disk_used_bytes: Vec::new(),
+            disk_total_bytes: Vec::new(),
+            net_rx_bytes_per_sec: None,
+            net_tx_bytes_per_sec: None,
         }),
         Body::MetricsHistory(MetricsHistoryBody {
             sub: Uuid::from_u128(42),
@@ -110,9 +124,20 @@ fn samples() -> Vec<Body> {
             interval_ms: 30_000,
             cpu_percent: vec![0.0, 55.5, 100.0],
             mem_used_bytes: vec![1, 2, 3],
-            mem_total_bytes: 34_359_738_368,
+            mem_total_bytes: Some(34_359_738_368),
             net_rx_bytes_per_sec: vec![0, 10, 20],
             net_tx_bytes_per_sec: vec![5, 15, 25],
+        }),
+        // Nothing sampled yet: empty arrays and an unknown capacity.
+        Body::MetricsHistory(MetricsHistoryBody {
+            sub: Uuid::from_u128(44),
+            start_ts: 0,
+            interval_ms: 30_000,
+            cpu_percent: Vec::new(),
+            mem_used_bytes: Vec::new(),
+            mem_total_bytes: None,
+            net_rx_bytes_per_sec: Vec::new(),
+            net_tx_bytes_per_sec: Vec::new(),
         }),
     ]
 }

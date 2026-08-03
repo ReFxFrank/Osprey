@@ -1283,10 +1283,12 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror",
  "tracing",
  "tracing-subscriber",
  "ureq",
  "uuid",
+ "windows",
 ]
 
 [[package]]

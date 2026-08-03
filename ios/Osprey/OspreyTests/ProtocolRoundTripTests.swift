@@ -48,7 +48,21 @@ final class ProtocolRoundTripTests: XCTestCase {
                     sub: deviceID, startTs: 1_699_913_600_000, intervalMs: 30_000,
                     cpuPercent: [0.0, 55.5, 100.0],
                     memUsedBytes: [1, 2, 3], memTotalBytes: 34_359_738_368,
-                    netRxBytesPerSec: [0, 10, 20], netTxBytesPerSec: [5, 15, 25]))
+                    netRxBytesPerSec: [0, 10, 20], netTxBytesPerSec: [5, 15, 25])),
+            // Absent is a different claim from zero — throughput the agent
+            // could not determine, and a capacity it has not sampled yet. Both
+            // must survive the round trip as absent.
+            .metricsTick(
+                MetricsTickBody(
+                    sub: deviceID, ts: 1_700_000_000_000, cpuPercent: 0.0,
+                    memUsedBytes: 1, memTotalBytes: 2,
+                    diskLabels: [], diskUsedBytes: [], diskTotalBytes: [],
+                    netRxBytesPerSec: nil, netTxBytesPerSec: nil)),
+            .metricsHistory(
+                MetricsHistoryBody(
+                    sub: deviceID, startTs: 0, intervalMs: 30_000,
+                    cpuPercent: [], memUsedBytes: [], memTotalBytes: nil,
+                    netRxBytesPerSec: [], netTxBytesPerSec: []))
         ]
 
         for body in bodies {

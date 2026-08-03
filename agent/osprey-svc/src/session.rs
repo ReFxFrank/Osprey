@@ -8,6 +8,7 @@
 //! cannot tell which.
 
 use std::io::{Read, Write};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use osprey_core::identity::PinnedPeer;
@@ -18,7 +19,30 @@ use osprey_proto::{
 };
 use uuid::Uuid;
 
+use crate::metrics::{wire, MetricsEngine, Subscription};
+use crate::pacing::WaitReadable;
 use crate::revoke::RevocationHandler;
+
+/// How long the loop blocks waiting for the peer before it looks for metrics to
+/// push. Short enough that a 1 Hz stream is not visibly jittered by it.
+const TICK_SLICE: Duration = Duration::from_millis(200);
+
+/// The same wait with nobody subscribed. Nothing needs pushing, so the loop
+/// only has to wake often enough to notice the idle deadline.
+const QUIET_SLICE: Duration = Duration::from_secs(5);
+
+/// A session with no inbound traffic and no live stream for this long is hung
+/// up on. `run` also sets this as the socket's read deadline, which bounds a
+/// peer that goes silent *mid-message*; this bound covers the ordinary case of
+/// a peer that simply stops talking.
+pub const SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// How long a single write may block before the session is abandoned.
+///
+/// Generous enough to survive a phone on a congested cell, short enough that a
+/// peer which has stopped reading cannot pin a thread indefinitely. Pushed
+/// ticks make that case reachable without the peer sending anything.
+pub const SESSION_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Management-plane messages are small; file chunks arrive at P3 with their own
 /// bound. Capping reassembly here means a peer cannot make the agent buffer
@@ -119,12 +143,12 @@ fn recv_envelope<S: Read>(session: &mut NoiseSession, stream: &mut S) -> Result<
 
 /// The capability set this build implements.
 ///
-/// Empty, and deliberately so: `Capability` is synthesised from the message
-/// groups, P0 implements none of them, and advertising one the agent cannot
-/// serve would be exactly the plausible-looking fiction CLAUDE.md rule 9
-/// forbids. Later phases add entries here as they land.
+/// An entry appears here only once the agent can actually serve every message
+/// in that group — advertising one it cannot is exactly the plausible-looking
+/// fiction CLAUDE.md rule 9 forbids. `Metrics` earned its place in P1 with
+/// `metrics.subscribe`, `metrics.tick` and `metrics.history` all implemented.
 pub fn capabilities() -> Vec<Capability> {
-    Vec::new()
+    vec![Capability::Metrics]
 }
 
 /// Run the agent's half of a session to completion.
@@ -132,12 +156,13 @@ pub fn capabilities() -> Vec<Capability> {
 /// `peer` is the pin this session handshook against; it is the identity key a
 /// `pair.revoke` must verify under, and it must come from the host's own store
 /// rather than from anything the peer says.
-pub fn serve<S: Read + Write>(
+pub fn serve<S: Read + Write + WaitReadable>(
     session: &mut NoiseSession,
     stream: &mut S,
     config: &SessionConfig,
     peer: &PinnedPeer,
     revocation: &RevocationHandler<'_>,
+    metrics: &MetricsEngine,
 ) -> Result<SessionReport> {
     session.set_max_message_len(MAX_SESSION_MESSAGE_LEN);
     let (peer_device_id, hello_id) = read_hello(session, stream)?;
@@ -157,30 +182,105 @@ pub fn serve<S: Read + Write>(
         }),
     )?;
 
-    let mut pings_answered = 0u64;
+    let mut runtime = Runtime {
+        pings_answered: 0,
+        stream: None,
+        metrics,
+    };
+    let mut last_activity = Instant::now();
+
     loop {
+        // Ticks first: a sample that arrived while the loop was blocked should
+        // reach the controller before the loop blocks again.
+        if runtime.push_ticks(session, stream)? {
+            last_activity = Instant::now();
+        }
+
+        let slice = if runtime.stream.is_some() {
+            TICK_SLICE
+        } else {
+            QUIET_SLICE
+        };
+        if !stream
+            .wait_readable(slice)
+            .context("could not wait on the session transport")?
+        {
+            if last_activity.elapsed() >= SESSION_IDLE_TIMEOUT {
+                anyhow::bail!(
+                    "no traffic for {} seconds",
+                    SESSION_IDLE_TIMEOUT.as_secs()
+                );
+            }
+            continue;
+        }
+
         let Some(envelope) = recv_envelope(session, stream)? else {
             return Ok(SessionReport {
                 end: SessionEnd::PeerClosed,
                 peer_device_id,
-                pings_answered,
+                pings_answered: runtime.pings_answered,
             });
         };
+        last_activity = Instant::now();
+
         let context = DispatchContext {
             peer,
             peer_device_id,
             revocation,
         };
-        match dispatch(session, stream, &envelope, &context, &mut pings_answered)? {
-            Some(end) => {
-                return Ok(SessionReport {
-                    end,
-                    peer_device_id,
-                    pings_answered,
-                })
-            }
-            None => continue,
+        if let Some(end) = dispatch(session, stream, &envelope, &context, &mut runtime)? {
+            return Ok(SessionReport {
+                end,
+                peer_device_id,
+                pings_answered: runtime.pings_answered,
+            });
         }
+    }
+}
+
+/// Per-session mutable state that outlives one dispatched message.
+struct Runtime<'a> {
+    pings_answered: u64,
+    /// The controller's live metrics stream, if it asked for one.
+    stream: Option<ActiveStream>,
+    metrics: &'a MetricsEngine,
+}
+
+/// A `metrics.subscribe` that asked to keep streaming.
+struct ActiveStream {
+    /// Envelope id of the subscribe, echoed as `sub` on every pushed tick so
+    /// the client can ignore ticks from a subscription it has replaced.
+    sub_id: Uuid,
+    subscription: Subscription,
+}
+
+impl Runtime<'_> {
+    /// Send every queued sample. Returns whether anything was sent.
+    ///
+    /// A successful push counts as session activity: a controller watching a
+    /// dashboard sends nothing for minutes at a time, and a write that the peer
+    /// is no longer reading fails on its own rather than needing a timer to
+    /// notice.
+    fn push_ticks<S: Read + Write>(
+        &mut self,
+        session: &mut NoiseSession,
+        stream: &mut S,
+    ) -> Result<bool> {
+        let Some(active) = &self.stream else {
+            return Ok(false);
+        };
+        let samples = active.subscription.drain();
+        if samples.is_empty() {
+            return Ok(false);
+        }
+        let sub_id = active.sub_id;
+        for sample in &samples {
+            let body = Body::MetricsTick(wire::tick_body(sub_id, sample));
+            // A pushed tick is uncorrelated: it carries its own envelope id and
+            // identifies its stream through `sub`, per the brief's stream model.
+            send(session, stream, Uuid::new_v4(), &body)?;
+        }
+        Ok(true)
     }
 }
 
@@ -198,7 +298,7 @@ fn dispatch<S: Read + Write>(
     stream: &mut S,
     envelope: &Envelope,
     context: &DispatchContext<'_>,
-    pings_answered: &mut u64,
+    runtime: &mut Runtime<'_>,
 ) -> Result<Option<SessionEnd>> {
     if let Err(err) = envelope.check_version() {
         send_error(
@@ -237,7 +337,25 @@ fn dispatch<S: Read + Write>(
                     echo_ts: envelope.ts,
                 }),
             )?;
-            *pings_answered += 1;
+            runtime.pings_answered += 1;
+            Ok(None)
+        }
+        MessageType::MetricsSubscribe => {
+            let body = match envelope.decode_body() {
+                Ok(Body::MetricsSubscribe(body)) => body,
+                Ok(_) | Err(_) => {
+                    send_error(
+                        session,
+                        stream,
+                        envelope.id,
+                        ErrorCode::BadRequest,
+                        "metrics.subscribe body did not match the schema",
+                        false,
+                    )?;
+                    return Ok(None);
+                }
+            };
+            handle_metrics_subscribe(session, stream, envelope.id, &body, runtime)?;
             Ok(None)
         }
         MessageType::PairRevoke => {
@@ -278,6 +396,45 @@ fn dispatch<S: Read + Write>(
             Ok(None)
         }
     }
+}
+
+/// Answer a `metrics.subscribe`: backfill now, then stream if asked.
+///
+/// The correlated answer is a `metrics.history` body — the subscribe *is* the
+/// history request, which is what keeps the metrics group at the three message
+/// types the registry reserved for it. `stream = false` therefore doubles as
+/// both a one-shot query and the unsubscribe.
+fn handle_metrics_subscribe<S: Read + Write>(
+    session: &mut NoiseSession,
+    stream: &mut S,
+    id: Uuid,
+    body: &osprey_proto::MetricsSubscribeBody,
+    runtime: &mut Runtime<'_>,
+) -> Result<()> {
+    let history = runtime.metrics.history(body.backfill_seconds);
+    // Passed through as an Option: nothing has been sampled yet on a service
+    // that just started, and the wire says "unknown" rather than "0 bytes".
+    let installed = runtime.metrics.latest_total_memory();
+    send(
+        session,
+        stream,
+        id,
+        &Body::MetricsHistory(wire::history_body(id, history.as_ref(), installed)),
+    )?;
+
+    if body.stream {
+        // Replacing rather than adding: one stream per session, so a client
+        // that re-subscribes cannot silently accumulate feeds it will then see
+        // as duplicate ticks.
+        runtime.stream = Some(ActiveStream {
+            sub_id: id,
+            subscription: runtime.metrics.subscribe(),
+        });
+        tracing::debug!(%id, "metrics stream opened");
+    } else if runtime.stream.take().is_some() {
+        tracing::debug!(%id, "metrics stream closed at the peer's request");
+    }
+    Ok(())
 }
 
 /// Apply a `pair.revoke`, or tell the peer why it was refused.

@@ -14,18 +14,14 @@ use osprey_core::identity::{DeviceIdentity, PinnedPeer};
 use crate::discovery::Advertisement;
 use crate::host::Host;
 use crate::lan::{LanListener, DEFAULT_LAN_PORT};
+use crate::metrics::MetricsEngine;
 use crate::registry::{spawn_revocation_watcher, SessionRegistry, REVOCATION_POLL_INTERVAL};
 use crate::revoke::RevocationHandler;
-use crate::session::{self, SessionConfig};
+use crate::session::{self, SessionConfig, SESSION_IDLE_TIMEOUT, SESSION_WRITE_TIMEOUT};
 use crate::state::HostState;
 
 /// How long the accept loop blocks before re-checking the shutdown flag.
 const ACCEPT_SLICE: Duration = Duration::from_millis(250);
-
-/// A session with nothing to say for this long is hung up on. Long enough that
-/// a phone in a pocket is not disconnected between glances; short enough that a
-/// dead TCP connection does not hold a thread forever.
-const SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone)]
 pub struct RunOptions {
@@ -69,6 +65,9 @@ pub fn execute(
         host.state.device_id(),
         listener.addresses(),
     );
+    // Started before the accept loop so the ring is already filling when the
+    // first controller connects and asks for history.
+    let metrics = MetricsEngine::start();
     let registry = SessionRegistry::new();
     let watcher = spawn_revocation_watcher(
         host.layout.state.clone(),
@@ -119,6 +118,7 @@ pub fn execute(
             let revocation = &revocation;
             let registry = Arc::clone(&registry);
             let config = config.clone();
+            let metrics = &metrics;
             scope.spawn(move || {
                 let session = Session {
                     identity,
@@ -127,6 +127,7 @@ pub fn execute(
                     state_path,
                     config: &config,
                     revocation,
+                    metrics,
                 };
                 if let Err(err) = serve_one(&session, stream, peer_addr) {
                     tracing::warn!(%peer_addr, error = %err, "session ended with an error");
@@ -160,12 +161,23 @@ struct Session<'a> {
     state_path: &'a Path,
     config: &'a SessionConfig,
     revocation: &'a RevocationHandler<'a>,
+    /// Shared by every session: the counters are whole-machine values, so one
+    /// sampler serves all of them.
+    metrics: &'a MetricsEngine,
 }
 
 fn serve_one(session: &Session<'_>, mut stream: TcpStream, peer_addr: SocketAddr) -> Result<()> {
     stream
         .set_read_timeout(Some(SESSION_IDLE_TIMEOUT))
         .context("could not set a session read timeout")?;
+    // Without this a peer that stops reading parks the session thread inside
+    // `write_all` forever: the loop never returns to `wait_readable`, so the
+    // idle deadline cannot fire either, and the thread is unreclaimable until
+    // the process exits. Pushed metrics ticks make that reachable without the
+    // peer having to send anything at all.
+    stream
+        .set_write_timeout(Some(SESSION_WRITE_TIMEOUT))
+        .context("could not set a session write timeout")?;
 
     // `accept` refuses any peer whose static is not pinned. That check is the
     // unpair enforcement point: nothing about it involves the relay, so a
@@ -203,6 +215,7 @@ fn serve_one(session: &Session<'_>, mut stream: TcpStream, peer_addr: SocketAddr
         session.config,
         peer,
         session.revocation,
+        session.metrics,
     )?;
     tracing::info!(
         %peer_addr,

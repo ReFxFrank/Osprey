@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(cargo test*)",
+      "PowerShell(cargo clippy*)",
+      "PowerShell(cargo check*)",
+      "PowerShell(cargo build*)",
+      "PowerShell(cargo tree*)",
+      "PowerShell(cargo fmt --check*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo build:*)",
+      "Bash(cargo tree:*)",
+      "PowerShell(pnpm test)",
+      "PowerShell(pnpm lint)",
+      "PowerShell(pnpm typecheck)",
+      "PowerShell(pnpm generate)",
+      "PowerShell(docker info*)",
+      "PowerShell(docker logs*)",
+      "PowerShell(docker inspect*)"
+    ]
+  }
+}

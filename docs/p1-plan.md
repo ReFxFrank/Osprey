@@ -29,6 +29,14 @@ gate report can cite the deviation-that-isn't: no async exists yet.
   recovery actions (1 s / 5 s / 30 s), display name "Osprey Agent". The single
   allowed registry key records install state; config stays in
   `%ProgramData%\Osprey\config.toml`.
+- **One elevation, nothing to launch.** The installer is the only interactive
+  prompt the product ever shows: it elevates once, registers the service, and
+  from then on the service starts at boot and spawns the helper itself. The
+  operator launches nothing and sees only the tray icon. The installer also
+  pre-creates the Windows Firewall rule for the LAN listener on the *Private*
+  profile (amendment A7), because otherwise the first `run` triggers a second
+  prompt that the product has no reason to make a human answer. The three
+  processes are a Session 0 requirement (§9.1), never something a user starts.
 - The service main wraps exactly what console `run` wraps: `Host::open`,
   `LanListener`, sessions, plus the new relay thread and sampler. Stop request
   flips the existing `AtomicBool`.

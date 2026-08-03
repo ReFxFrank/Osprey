@@ -319,12 +319,12 @@ public struct MetricsTickBody: OspreyMessageBody {
     public var diskUsedBytes: [UInt64]
     /// Capacity per volume, parallel with `disk_labels`.
     public var diskTotalBytes: [UInt64]
-    /// Aggregate receive rate across physical interfaces since the previous sample. Per-interface detail is M-16 (`net.interfaces`), not this message.
-    public var netRxBytesPerSec: UInt64
-    /// Aggregate transmit rate across physical interfaces since the previous sample.
-    public var netTxBytesPerSec: UInt64
+    /// Aggregate receive rate across physical interfaces since the previous sample. **Absent means the rate is unknown for this interval**, not zero — an adapter appeared, vanished or had its counters reset, so the difference from the previous reading describes nothing. A client must render an absent value as a gap, never as an idle link. Per-interface detail is M-16 (`net.interfaces`), not this message.
+    public var netRxBytesPerSec: UInt64?
+    /// Aggregate transmit rate. Absent has the same meaning as for `net_rx_bytes_per_sec`.
+    public var netTxBytesPerSec: UInt64?
 
-    public init(sub: UUID, ts: Int64, cpuPercent: Double, memUsedBytes: UInt64, memTotalBytes: UInt64, diskLabels: [String], diskUsedBytes: [UInt64], diskTotalBytes: [UInt64], netRxBytesPerSec: UInt64, netTxBytesPerSec: UInt64) {
+    public init(sub: UUID, ts: Int64, cpuPercent: Double, memUsedBytes: UInt64, memTotalBytes: UInt64, diskLabels: [String], diskUsedBytes: [UInt64], diskTotalBytes: [UInt64], netRxBytesPerSec: UInt64?, netTxBytesPerSec: UInt64?) {
         self.sub = sub
         self.ts = ts
         self.cpuPercent = cpuPercent
@@ -366,14 +366,14 @@ public struct MetricsHistoryBody: OspreyMessageBody {
     public var cpuPercent: [Double]
     /// Physical memory in use per sample.
     public var memUsedBytes: [UInt64]
-    /// Physical memory installed. Scalar — capacity does not vary sample to sample.
-    public var memTotalBytes: UInt64
+    /// Physical memory installed. Scalar — capacity does not vary sample to sample. Absent when the agent has not yet completed a sample, so the client shows the axis as unknown instead of scaling a chart against a fabricated zero.
+    public var memTotalBytes: UInt64?
     /// Aggregate receive rate per sample.
     public var netRxBytesPerSec: [UInt64]
     /// Aggregate transmit rate per sample.
     public var netTxBytesPerSec: [UInt64]
 
-    public init(sub: UUID, startTs: Int64, intervalMs: UInt32, cpuPercent: [Double], memUsedBytes: [UInt64], memTotalBytes: UInt64, netRxBytesPerSec: [UInt64], netTxBytesPerSec: [UInt64]) {
+    public init(sub: UUID, startTs: Int64, intervalMs: UInt32, cpuPercent: [Double], memUsedBytes: [UInt64], memTotalBytes: UInt64?, netRxBytesPerSec: [UInt64], netTxBytesPerSec: [UInt64]) {
         self.sub = sub
         self.startTs = startTs
         self.intervalMs = intervalMs

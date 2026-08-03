@@ -24,6 +24,8 @@ pub mod commands;
 pub mod discovery;
 pub mod host;
 pub mod lan;
+pub mod metrics;
+pub mod pacing;
 pub mod paths;
 pub mod qrterm;
 pub mod registry;

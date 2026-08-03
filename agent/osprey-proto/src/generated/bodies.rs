@@ -180,10 +180,12 @@ pub struct MetricsTickBody {
     pub disk_used_bytes: Vec<u64>,
     /// Capacity per volume, parallel with `disk_labels`.
     pub disk_total_bytes: Vec<u64>,
-    /// Aggregate receive rate across physical interfaces since the previous sample. Per-interface detail is M-16 (`net.interfaces`), not this message.
-    pub net_rx_bytes_per_sec: u64,
-    /// Aggregate transmit rate across physical interfaces since the previous sample.
-    pub net_tx_bytes_per_sec: u64,
+    /// Aggregate receive rate across physical interfaces since the previous sample. **Absent means the rate is unknown for this interval**, not zero — an adapter appeared, vanished or had its counters reset, so the difference from the previous reading describes nothing. A client must render an absent value as a gap, never as an idle link. Per-interface detail is M-16 (`net.interfaces`), not this message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub net_rx_bytes_per_sec: Option<u64>,
+    /// Aggregate transmit rate. Absent has the same meaning as for `net_rx_bytes_per_sec`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub net_tx_bytes_per_sec: Option<u64>,
 }
 
 /// Agent → client, and only ever a *response* — it answers `metrics.subscribe` with the requested backfill (correlated by envelope id). Samples are fixed-cadence parallel arrays: `start_ts` plus `interval_ms` locate every sample without a per-sample timestamp array, which is what keeps a 24 h backfill inside the session's message-size cap. The agent decimates (and says so via `interval_ms`) rather than exceeding the cap. Disk usage has no history — it moves too slowly to chart and rides every `metrics.tick` instead.
@@ -200,8 +202,9 @@ pub struct MetricsHistoryBody {
     pub cpu_percent: Vec<f64>,
     /// Physical memory in use per sample.
     pub mem_used_bytes: Vec<u64>,
-    /// Physical memory installed. Scalar — capacity does not vary sample to sample.
-    pub mem_total_bytes: u64,
+    /// Physical memory installed. Scalar — capacity does not vary sample to sample. Absent when the agent has not yet completed a sample, so the client shows the axis as unknown instead of scaling a chart against a fabricated zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mem_total_bytes: Option<u64>,
     /// Aggregate receive rate per sample.
     pub net_rx_bytes_per_sec: Vec<u64>,
     /// Aggregate transmit rate per sample.

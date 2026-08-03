@@ -65,7 +65,14 @@ rule 5's bar.
 | `hex` | Renders key fingerprints the operator reads off the screen to confirm a pin. |
 | `uuid` | Device ids, shared with the protocol layer. |
 | `base64` | Encodes key material in the QR payload and in relay requests, matching the protocol layer's encoding. |
+| `windows` (cfg windows) | M-01 counters: `GetSystemTimes`, `GlobalMemoryStatusEx`, `GetDiskFreeSpaceExW` and `GetIfTable2`. Scoped to `cfg(windows)` so the Linux CI build never pulls it. |
 | `tempfile` (dev) | Test isolation. |
+
+`sysinfo` was deliberately **not** used for M-01. It is a large cross-platform
+polling crate whose Windows path reads the same four APIs this does, and rule 5
+does not permit a dependency to save four calls. The P1 gate also budgets idle
+CPU below 1%, which rewards sampling exactly the counters the product charts
+rather than everything a general-purpose crate collects.
 
 ## Agent — `osprey-ffi`
 

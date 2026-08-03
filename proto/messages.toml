@@ -399,8 +399,8 @@ fields = [
   { name = "disk_labels", type = "[string]", doc = "Fixed-volume labels (e.g. \"C:\"), parallel with the two disk arrays." },
   { name = "disk_used_bytes", type = "[u64]", doc = "Used bytes per volume, parallel with `disk_labels`." },
   { name = "disk_total_bytes", type = "[u64]", doc = "Capacity per volume, parallel with `disk_labels`." },
-  { name = "net_rx_bytes_per_sec", type = "u64", doc = "Aggregate receive rate across physical interfaces since the previous sample. Per-interface detail is M-16 (`net.interfaces`), not this message." },
-  { name = "net_tx_bytes_per_sec", type = "u64", doc = "Aggregate transmit rate across physical interfaces since the previous sample." },
+  { name = "net_rx_bytes_per_sec", type = "u64", optional = true, doc = "Aggregate receive rate across physical interfaces since the previous sample. **Absent means the rate is unknown for this interval**, not zero — an adapter appeared, vanished or had its counters reset, so the difference from the previous reading describes nothing. A client must render an absent value as a gap, never as an idle link. Per-interface detail is M-16 (`net.interfaces`), not this message." },
+  { name = "net_tx_bytes_per_sec", type = "u64", optional = true, doc = "Aggregate transmit rate. Absent has the same meaning as for `net_rx_bytes_per_sec`." },
 ]
 
 [[messages]]
@@ -423,7 +423,7 @@ fields = [
   { name = "interval_ms", type = "u32", doc = "Spacing between samples. The ring buffer's native cadence is 30 s; a larger value means the agent decimated to fit the message cap." },
   { name = "cpu_percent", type = "[f64]", doc = "Whole-machine CPU utilisation per sample, 0–100." },
   { name = "mem_used_bytes", type = "[u64]", doc = "Physical memory in use per sample." },
-  { name = "mem_total_bytes", type = "u64", doc = "Physical memory installed. Scalar — capacity does not vary sample to sample." },
+  { name = "mem_total_bytes", type = "u64", optional = true, doc = "Physical memory installed. Scalar — capacity does not vary sample to sample. Absent when the agent has not yet completed a sample, so the client shows the axis as unknown instead of scaling a chart against a fabricated zero." },
   { name = "net_rx_bytes_per_sec", type = "[u64]", doc = "Aggregate receive rate per sample." },
   { name = "net_tx_bytes_per_sec", type = "[u64]", doc = "Aggregate transmit rate per sample." },
 ]

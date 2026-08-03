@@ -17,6 +17,7 @@ path = "src/main.rs"
 osprey-core = { path = "../osprey-core" }
 osprey-proto = { path = "../osprey-proto" }
 anyhow.workspace = true
+thiserror.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true
 tracing.workspace = true
@@ -41,6 +42,21 @@ mdns-sd = { version = "0.20", default-features = false }
 # on the shipping Windows target — no C toolchain — and to OpenSSL on the Linux
 # CI host.
 ureq = { version = "3", default-features = false, features = ["native-tls", "json"] }
+
+# M-01 reads whole-machine counters straight from Win32. The DRIVE_* constants
+# live in WindowsProgramming rather than beside GetDriveTypeW, and GetIfTable2
+# and MIB_IF_TABLE2 are cfg-gated on Ndis *in addition* to IpHelper — omitting
+# either feature makes the symbol silently not exist.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_System_SystemInformation",
+    "Win32_System_WindowsProgramming",
+    "Win32_Storage_FileSystem",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+] }
 
 [dev-dependencies]
 tempfile = "3"
