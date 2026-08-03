@@ -1,7 +1,10 @@
 # Gate Report — P0: Foundations
 
 *Osprey (formerly codenamed TETHER). Report format per brief §15.*
-*Last updated after the no-Mac completion pass.*
+*Last updated after the Windows-native verification pass of 2026-08-02. All
+prior measurements were taken on Linux; this pass re-ran the agent suite,
+clippy, codegen reproducibility, relay lint/typecheck and the mDNS test on the
+actual target platform for the first time.*
 
 ## Status
 
@@ -25,12 +28,12 @@ environment and observed.
 | # | Criterion (verbatim from brief) | Result | Evidence |
 |---|---|---|---|
 | 1 | Phone scans QR, pairs, exchanges an authenticated encrypted `ping`/`pong` over the local network. | **NOT MEASURED** | Still requires the phone, so it stays unmeasured — but substantially de-risked since this report was first written. The iOS Swift sources were linked against the real Rust library on Linux and the XCTest suite run against a live `osprey-core` responder: 46 tests, 0 failures, driving genuine IKpsk2 handshakes through the same UniFFI surface the phone will use. Agent-side, `pair_then_session_then_unpair_blocks_the_next_connection` covers pairing, session, ping/pong and unpair over real TCP. What remains unproven is the Apple-SDK half — Secure Enclave, camera, Keychain — and the app has never been compiled by Xcode. |
-| 2 | Keys survive agent restart and app restart. | **PARTIAL** | Agent half PASS — `dev_keystore_survives_a_save_load_cycle` reopens the keystore as a restart proxy and asserts the reloaded bundle is byte-identical and still verifies. App half NOT MEASURED: Keychain/Secure Enclave persistence needs the device. |
+| 2 | Keys survive agent restart and app restart. | **PARTIAL** | Agent half PASS — `keystore_survives_a_save_load_cycle` reopens the keystore as a restart proxy and asserts the reloaded bundle is byte-identical and still verifies. As of 2026-08-02 the test is backend-generic and on Windows runs against the **shipping DPAPI backend** (`CRYPTPROTECT_LOCAL_MACHINE` seal/unseal round-trip); before that it had only ever exercised the Unix dev backend. App half NOT MEASURED: Keychain/Secure Enclave persistence needs the device. |
 | 3 | Unpair works from both sides and immediately blocks traffic. | **PASS** | Both directions. Agent side: `osprey-svc unpair`. Peer side: `pair.revoke` verified against the pinned identity with a freshness window, single-use nonce, and issuer/target binding; wrong-identity, replayed-nonce and stale-timestamp cases all rejected. Enforcement is local and authoritative — the relay is never the enforcement point. |
 | 4 | Tampering with a handshake byte causes a clean logged failure, not a panic. | **PASS** | Byte-flip tests across handshake offsets return typed errors and write an audit entry. `#![deny(clippy::unwrap_used, clippy::expect_used)]` is active on the crypto crates and was proven to fire by inserting a deliberate `unwrap()`. |
 | 5 | Cross-tenant test suite green: two accounts, every endpoint, 404 on foreign resources. **Report the endpoint count.** | **PASS — 8 endpoints** | The suite enumerates the live Fastify route table and fails if any registered route lacks a cross-tenant assertion, and also fails on assertions naming routes that no longer exist. One route is explicitly exempt (`GET /healthz`, a constant-returning liveness probe). |
 | 6 | No raw `db.` access outside `src/repo/` — lint rule active and passing. | **PASS** | Two independent mechanisms (string-pattern `no-restricted-imports` + resolver-based `eslint-plugin-boundaries`). Proven to *fire*, not merely be configured: a violating file is planted and the error asserted, including in a nested subdirectory. |
-| 7 | `cargo clippy -- -D warnings` and `swiftlint` clean. | **PARTIAL** | clippy PASS on the host **and** `x86_64-pc-windows-msvc` (exit 0, all targets). swiftlint **NOT MEASURED** — not installable here and the app cannot be compiled without the Apple SDK. |
+| 7 | `cargo clippy -- -D warnings` and `swiftlint` clean. | **PARTIAL** | clippy PASS on the Linux host, on cross-checked `x86_64-pc-windows-msvc`, and — as of 2026-08-02 — **natively on the Windows target machine** (both required invocations, exit 0, all targets). swiftlint **NOT MEASURED** — needs the Mac session. |
 | + | *(amendment A17)* Against a deliberately malicious relay, key substitution / self-redemption / token replay all fail closed. | **PASS** | Re-attacked after remediation: a relay holding only `routing_id` cannot complete the PSK handshake; replayed and expired tokens are refused; redeem is single-use and atomic. |
 
 ## Measurements
@@ -56,6 +59,23 @@ environment and observed.
 | Largest source file | 563 lines (`osprey-svc/src/state.rs`) — under the 600 limit |
 | Codegen reproducibility | regenerating produces an empty git diff |
 | Agent idle CPU / RSS | **NOT MEASURED** — a P1 criterion, not P0 |
+
+### Windows-native pass (2026-08-02, the target machine)
+
+Everything above this subsection was measured on Linux. These numbers are from
+the Windows dev/target machine itself (Rust 1.97.0 MSVC, Node 24.16.0):
+
+| Metric | Value |
+|---|---|
+| Agent tests (`cargo test --workspace`) | **145 passed, 0 failed, 2 ignored** — +3 vs Linux because the keystore tests now run against the shipping DPAPI backend, which the Linux pass structurally could not |
+| clippy — native host, `--all-targets -D warnings` | exit 0 |
+| clippy — explicit `x86_64-pc-windows-msvc` target | exit 0 |
+| `mdns_discovery` (ignored test, first execution ever) | **PASS** — advertise/discover/goodbye on the real network stack, 1.93 s |
+| DPAPI seal/unseal round-trip (`keystore_survives_a_save_load_cycle`) | **PASS** — `CRYPTPROTECT_LOCAL_MACHINE`, byte-identical reload, cross-signature re-verifies |
+| Codegen reproducibility on Windows | empty git diff after `pnpm generate` (required the `.gitattributes` fix — see discovered problem 11) |
+| Relay lint / typecheck | clean / clean |
+| Relay tests (`pnpm test`, live Postgres 16 in Docker) | **70 passed, 0 failed** — parity with Linux, after the shutdown-fixture fix (discovered problem 13). The very first run, seconds after the Postgres container was created, failed 19 tests with empty connection errors; every run since is clean. Most likely the container's init-phase restart dropping connections mid-suite — a bootstrap-timing artifact, not a suite defect, and unreproducible once the container is warm. |
+| `relay_live` (ignored test, first execution ever) | **PASS** — agent enrolled, issued, looked up and revoked a pairing token against the actually-running relay over HTTP (0.07 s) |
 
 ### Reproduce
 
@@ -140,6 +160,34 @@ original attack rather than by re-reading the diff.
    carries the three load-bearing keys: `NSCameraUsageDescription` (absent → hard
    crash on first capture), `NSLocalNetworkUsageDescription` (absent → the
    connection silently never becomes ready) and `NSBonjourServices`.
+
+### Found by the Windows-native pass (2026-08-02)
+
+10. **The DPAPI keystore had zero test coverage anywhere.** The keystore tests
+    were `#[cfg(not(windows))]` and exercised only the Unix dev backend — so
+    criterion 2's agent half had only ever been proven against a backend the
+    product never ships, and the first execution of `CryptProtectData` /
+    `CryptUnprotectData` would have been in production. Fixed: the keystore
+    tests are now backend-generic (`open_keystore()` selects DPAPI on Windows,
+    the dev file elsewhere); all pass against real DPAPI with machine scope.
+11. **Codegen reproducibility false-fails on Windows.** With `core.autocrlf`,
+    a checkout is CRLF while the generator emits LF, so "regenerate → empty
+    git diff" failed spuriously despite byte-identical content. Fixed with a
+    `.gitattributes` pinning the generated trees and `proto/messages.toml` to
+    LF; regeneration on Windows now produces an empty diff.
+12. **The mDNS test had never run at all.** `mdns_discovery` was ignored on
+    Linux ("needs a live network peer") and had no prior Windows run. Executed
+    on the real Windows network stack: advertise, discover, and
+    goodbye-on-shutdown all pass (1.93 s).
+13. **The shutdown test was structurally impossible on Windows.** Its fixture
+    delivered `process.kill(pid, 'SIGTERM')`, but Windows has no deliverable
+    SIGTERM — Node terminates the target unconditionally without running
+    handlers, so the process died at `ready` and both assertions failed. The
+    fixture now dispatches on platform: POSIX keeps the real end-to-end kill;
+    Windows invokes the registered handlers via `process.emit('SIGTERM')`,
+    which still exercises everything the test asserts (the rejection path, the
+    pool close in `finally`, the exit codes). The relay deploys on Linux, so
+    the production signal path remains covered where it actually runs.
 
 ### Carried forward — will bite later
 

@@ -4,12 +4,23 @@ use osprey_core::error::{CrossSignatureFailure, Error};
 use osprey_core::identity::{verify_cross_signature, DeviceIdentity, PinnedPeer};
 use osprey_proto::IdentityAlgorithm;
 
-// The dev backend is deliberately compiled out on Windows so it cannot be
-// selected on the platform that has DPAPI, so the tests that exercise it must
-// disappear there too. The cross-signature tests below are platform-independent
-// and still run on every target.
+use osprey_core::keystore::Keystore;
+
+// The keystore tests run against whichever backend actually ships on the
+// platform under test: DPAPI on Windows (the shipping path), the dev file
+// backend elsewhere (compiled out on Windows so it cannot be selected there).
+// Behavioural coverage of the trait must include the Windows backend, or
+// gate criterion 2's "keys survive restart" is only ever proven against a
+// backend the product never uses.
+#[cfg(windows)]
+fn open_keystore(dir: &std::path::Path) -> impl Keystore {
+    osprey_core::keystore::DpapiKeystore::open(dir).expect("open keystore")
+}
+
 #[cfg(not(windows))]
-use osprey_core::keystore::{DevFileKeystore, Keystore};
+fn open_keystore(dir: &std::path::Path) -> impl Keystore {
+    osprey_core::keystore::DevFileKeystore::open(dir).expect("open keystore")
+}
 
 #[test]
 fn a_valid_cross_signature_verifies() {
@@ -129,17 +140,16 @@ fn rotation_offered_by_a_different_identity_is_refused() {
 }
 
 #[test]
-#[cfg(not(windows))]
-fn dev_keystore_survives_a_save_load_cycle() {
+fn keystore_survives_a_save_load_cycle() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let keystore = DevFileKeystore::open(dir.path()).expect("open keystore");
+    let keystore = open_keystore(dir.path());
 
     let original = DeviceIdentity::load_or_create(&keystore).expect("create");
     let original_public = original.public().clone();
     drop(original);
 
     // A fresh keystore handle stands in for an agent restart.
-    let reopened = DevFileKeystore::open(dir.path()).expect("reopen keystore");
+    let reopened = open_keystore(dir.path());
     let loaded = DeviceIdentity::load(&reopened)
         .expect("load")
         .expect("identity must survive restart");
@@ -157,10 +167,9 @@ fn dev_keystore_survives_a_save_load_cycle() {
 }
 
 #[test]
-#[cfg(not(windows))]
 fn keystore_delete_removes_the_identity_and_is_idempotent() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let keystore = DevFileKeystore::open(dir.path()).expect("open keystore");
+    let keystore = open_keystore(dir.path());
     DeviceIdentity::load_or_create(&keystore).expect("create");
     keystore.delete("device-identity").expect("delete");
     keystore.delete("device-identity").expect("delete again");
@@ -168,10 +177,9 @@ fn keystore_delete_removes_the_identity_and_is_idempotent() {
 }
 
 #[test]
-#[cfg(not(windows))]
 fn keystore_rejects_a_traversing_label() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let keystore = DevFileKeystore::open(dir.path()).expect("open keystore");
+    let keystore = open_keystore(dir.path());
     assert!(keystore.store("../escape", b"x").is_err());
     assert!(keystore.load("../escape").is_err());
 }

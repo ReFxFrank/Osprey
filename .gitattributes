@@ -1,0 +1,6 @@
+# Generated files must be byte-identical after `pnpm generate` on every
+# platform, or the codegen-reproducibility check false-fails under Windows
+# autocrlf. The generator emits LF; pin checkout to match.
+agent/osprey-proto/src/generated/** text eol=lf
+ios/Osprey/Osprey/Generated/** text eol=lf
+proto/messages.toml text eol=lf

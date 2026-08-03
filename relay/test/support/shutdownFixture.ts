@@ -42,4 +42,14 @@ process.once('SIGTERM', () => {
 });
 
 process.stdout.write('ready\n');
-process.kill(process.pid, 'SIGTERM');
+if (process.platform === 'win32') {
+  // Windows has no deliverable SIGTERM: process.kill() there terminates the
+  // process unconditionally without running handlers, so the OS delivery leg
+  // cannot be tested on this platform at all. Invoking the registered handlers
+  // directly still exercises everything the test is about — the rejection
+  // path, the pool close in `finally`, and the exit code. The POSIX branch
+  // below keeps the real end-to-end delivery where it exists.
+  process.emit('SIGTERM', 'SIGTERM');
+} else {
+  process.kill(process.pid, 'SIGTERM');
+}
