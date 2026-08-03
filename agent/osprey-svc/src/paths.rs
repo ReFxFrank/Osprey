@@ -8,6 +8,10 @@ use anyhow::{Context, Result};
 pub const KEYS_SUBDIR: &str = "keys";
 /// Append-only JSONL audit files, one per UTC day (brief §6.4).
 pub const AUDIT_SUBDIR: &str = "audit";
+/// Diagnostic logs. Distinct from `audit/`, which is a security record the
+/// operator may not delete; these are ordinary troubleshooting output and exist
+/// because a Windows service has no console for `tracing` to write to.
+pub const LOGS_SUBDIR: &str = "logs";
 /// Device id, relay credentials, and the pinned-peer list.
 pub const STATE_FILE: &str = "state.json";
 
@@ -49,6 +53,7 @@ pub struct DataLayout {
     pub root: PathBuf,
     pub keys: PathBuf,
     pub audit: PathBuf,
+    pub logs: PathBuf,
     pub state: PathBuf,
 }
 
@@ -58,6 +63,7 @@ impl DataLayout {
         Self {
             keys: root.join(KEYS_SUBDIR),
             audit: root.join(AUDIT_SUBDIR),
+            logs: root.join(LOGS_SUBDIR),
             state: root.join(STATE_FILE),
             root,
         }
@@ -71,7 +77,7 @@ impl DataLayout {
     }
 
     pub fn create(&self) -> Result<()> {
-        for dir in [&self.root, &self.keys, &self.audit] {
+        for dir in [&self.root, &self.keys, &self.audit, &self.logs] {
             std::fs::create_dir_all(dir)
                 .with_context(|| format!("could not create {}", dir.display()))?;
         }
@@ -88,7 +94,17 @@ mod tests {
         let layout = DataLayout::under("/var/osprey");
         assert_eq!(layout.keys, PathBuf::from("/var/osprey/keys"));
         assert_eq!(layout.audit, PathBuf::from("/var/osprey/audit"));
+        assert_eq!(layout.logs, PathBuf::from("/var/osprey/logs"));
         assert_eq!(layout.state, PathBuf::from("/var/osprey/state.json"));
+    }
+
+    #[test]
+    fn diagnostics_never_share_a_directory_with_the_audit_record() {
+        // Brief §6.4: the audit log is not deletable from the client. Keeping
+        // rotatable diagnostics out of that directory is what lets a future
+        // log-cleanup task exist without it being able to touch the record.
+        let layout = DataLayout::under("/var/osprey");
+        assert_ne!(layout.logs, layout.audit);
     }
 
     #[test]
@@ -98,5 +114,6 @@ mod tests {
         layout.create().expect("create");
         assert!(layout.keys.is_dir());
         assert!(layout.audit.is_dir());
+        assert!(layout.logs.is_dir());
     }
 }

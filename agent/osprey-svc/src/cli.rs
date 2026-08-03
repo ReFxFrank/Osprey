@@ -84,6 +84,53 @@ pub enum Command {
         #[arg(value_name = "DEVICE-ID|all")]
         target: String,
     },
+
+    /// Register the Windows service. Requires elevation.
+    ///
+    /// The one interactive step the product ever asks for: after this the
+    /// service starts at boot and nothing needs launching by hand.
+    Install {
+        /// Port the installed service listens on. Baked into its command line.
+        #[arg(long, default_value_t = DEFAULT_LAN_PORT)]
+        port: u16,
+
+        /// Install with LAN discovery advertising disabled.
+        #[arg(long)]
+        no_mdns: bool,
+
+        /// Do not create the inbound firewall rule for `--port`.
+        ///
+        /// Without the rule the direct-LAN path is silently unreachable until
+        /// somebody answers a Windows firewall prompt, so this exists for
+        /// operators who manage firewall policy centrally, not as a default.
+        #[arg(long)]
+        no_firewall_rule: bool,
+
+        /// Register the service but do not start it.
+        #[arg(long)]
+        no_start: bool,
+    },
+
+    /// Remove the Windows service. Requires elevation.
+    ///
+    /// Leaves `%ProgramData%\Osprey` alone: it holds the device identity, the
+    /// pins and the audit log, and deleting an audit log as a side effect of
+    /// uninstalling is exactly what brief §6.4 forbids.
+    Uninstall {
+        /// Also remove the firewall rule this installer created.
+        #[arg(long)]
+        remove_firewall_rule: bool,
+    },
+
+    /// Entry point the Service Control Manager invokes. Not for humans.
+    #[command(hide = true)]
+    Service {
+        #[arg(long, default_value_t = DEFAULT_LAN_PORT)]
+        port: u16,
+
+        #[arg(long)]
+        no_mdns: bool,
+    },
 }
 
 impl Command {
@@ -125,6 +172,56 @@ mod tests {
         assert!(matches!(
             paired_off.command,
             Command::Pair { no_mdns: true, .. }
+        ));
+    }
+
+    #[test]
+    fn the_service_entry_point_is_hidden_from_help() {
+        // It is invoked by the SCM with the command line `install` wrote, and
+        // an operator who runs it by hand gets a process that waits for a
+        // dispatcher connection that will never come. Keeping it out of --help
+        // is the difference between an internal detail and a trap.
+        let help = Cli::command().render_help().to_string();
+        // Matched against the subcommand column rather than the whole page:
+        // the word "service" legitimately appears in prose describing what the
+        // agent is.
+        let listed: Vec<&str> = help
+            .lines()
+            .filter_map(|line| line.strip_prefix("  "))
+            .filter_map(|line| line.split_whitespace().next())
+            .collect();
+        assert!(
+            !listed.contains(&"service"),
+            "the SCM entry point must not be advertised in help:\n{help}"
+        );
+        assert!(
+            listed.contains(&"install") && listed.contains(&"uninstall"),
+            "install and uninstall must be discoverable:\n{help}"
+        );
+    }
+
+    #[test]
+    fn install_defaults_to_creating_the_firewall_rule_and_starting() {
+        let parsed = Cli::try_parse_from(["osprey-svc", "install"]).expect("parse");
+        assert!(matches!(
+            parsed.command,
+            Command::Install {
+                no_firewall_rule: false,
+                no_start: false,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn uninstall_keeps_the_audit_log_unless_asked() {
+        // There is deliberately no flag that deletes %ProgramData%\Osprey.
+        let parsed = Cli::try_parse_from(["osprey-svc", "uninstall"]).expect("parse");
+        assert!(matches!(
+            parsed.command,
+            Command::Uninstall {
+                remove_firewall_rule: false
+            }
         ));
     }
 

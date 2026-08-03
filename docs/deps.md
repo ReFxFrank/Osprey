@@ -65,7 +65,8 @@ rule 5's bar.
 | `hex` | Renders key fingerprints the operator reads off the screen to confirm a pin. |
 | `uuid` | Device ids, shared with the protocol layer. |
 | `base64` | Encodes key material in the QR payload and in relay requests, matching the protocol layer's encoding. |
-| `windows` (cfg windows) | M-01 counters: `GetSystemTimes`, `GlobalMemoryStatusEx`, `GetDiskFreeSpaceExW` and `GetIfTable2`. Scoped to `cfg(windows)` so the Linux CI build never pulls it. |
+| `windows` (cfg windows) | M-01 counters (`GetSystemTimes`, `GlobalMemoryStatusEx`, `GetDiskFreeSpaceExW`, `GetIfTable2`) and the installer's two hardening steps: the `%ProgramData%\Osprey` DACL and the firewall rule. Scoped to `cfg(windows)` so the Linux CI build never pulls it. |
+| `windows-service` (cfg windows) | Service lifecycle §4.1 locks: SCM registration, the control handler, status transitions and the recovery actions that satisfy the P1 gate's auto-restart criterion. Hand-rolling `StartServiceCtrlDispatcherW` and the status protocol is not a fifteen-line job and gets the state machine wrong quietly. |
 | `tempfile` (dev) | Test isolation. |
 
 `sysinfo` was deliberately **not** used for M-01. It is a large cross-platform

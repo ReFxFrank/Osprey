@@ -56,7 +56,19 @@ windows = { version = "0.62", features = [
     "Win32_Storage_FileSystem",
     "Win32_NetworkManagement_IpHelper",
     "Win32_NetworkManagement_Ndis",
+    # The installer's two hardening steps. Win32_Security_Authorization carries
+    # SetNamedSecurityInfoW/SetEntriesInAclW and implies Win32_Security.
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    # Win32_System_Com is the sole gate on every INetFw* interface. The
+    # neighbouring RuntimeName blocks in the generated bindings additionally
+    # name Win32_System_Ole and Win32_System_Variant, which reads as though all
+    # three are required — they are not: only Interfaces()/SetInterfaces() carry
+    # that cfg and nothing here calls them.
+    "Win32_System_Com",
+    "Win32_NetworkManagement_WindowsFirewall",
 ] }
+windows-service = "0.8"
 
 [dev-dependencies]
 tempfile = "3"

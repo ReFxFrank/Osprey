@@ -31,5 +31,6 @@ pub mod qrterm;
 pub mod registry;
 pub mod relay;
 pub mod revoke;
+pub mod service;
 pub mod session;
 pub mod state;

@@ -33,6 +33,15 @@ pub struct RunOptions {
     /// loopback, and none of them should open a multicast socket or put a
     /// record on whatever network the machine running CI happens to be on.
     pub advertise_mdns: bool,
+
+    /// Refuse to start when nothing is paired.
+    ///
+    /// True from the console, where an operator who typed `run` before pairing
+    /// wants to be told so. False for the service, which is installed *before*
+    /// anyone pairs and must sit and listen until they do — an agent with no
+    /// pins is useless rather than unsafe, because `channel::accept` refuses
+    /// every peer that is not pinned.
+    pub require_paired_controller: bool,
 }
 
 impl Default for RunOptions {
@@ -40,6 +49,7 @@ impl Default for RunOptions {
         Self {
             port: DEFAULT_LAN_PORT,
             advertise_mdns: false,
+            require_paired_controller: true,
         }
     }
 }
@@ -55,7 +65,12 @@ pub fn execute(
     out: &mut dyn Write,
 ) -> Result<()> {
     if host.state.peers().is_empty() {
-        bail!("no controller is paired; run `osprey-svc pair` at this machine first");
+        if options.require_paired_controller {
+            bail!("no controller is paired; run `osprey-svc pair` at this machine first");
+        }
+        tracing::warn!(
+            "no controller is paired yet; listening anyway and refusing every connection until one is"
+        );
     }
     let listener = LanListener::bind(options.port)?;
     // Held for the whole accept loop; dropping it deregisters the record, which
