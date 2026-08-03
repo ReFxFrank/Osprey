@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="branding/osprey-logo.png" alt="Osprey" width="160">
+</p>
+
 # Osprey
 
 Self-hosted remote access for Windows machines you own, controlled from an
@@ -7,33 +11,60 @@ input) and of Pulseway (headless metrics, terminal, files, alerts).
 Not a support tool: there is no attended flow, no session codes, and no way to
 reach a machine that has not completed physical-access QR pairing.
 
-## Current state — P0, gate FAIL
+## Current state — P0 **PASS**, P1 in progress
 
-`artifacts/gate-P0.md` is the authoritative status. Summary:
+`artifacts/gate-P0.md` is the authoritative record for P0; it passed on
+2026-08-03 with every criterion measured on the hardware it was specified for.
 
 | Component | State |
 |---|---|
 | Protocol (`proto/`, codegen to Rust + Swift) | Built, tested |
-| Agent core + service (`agent/`) | Built, tested — **146 tests**; clippy clean on host and `x86_64-pc-windows-msvc` |
+| Agent (`agent/`) | **Registered Windows service**: boot start, auto-restart, hardened data directory. M-01 metrics streaming at 1 Hz |
 | Relay (`relay/`) | Built, tested — **70 tests** on Node 24 against live Postgres |
-| Rust↔Swift bridge (`agent/osprey-ffi`) | Cross-builds to `Mach-O arm64` for iOS device and simulator **from Linux** |
-| iOS client (`ios/`) | Source written; **never compiled against the Apple SDK** |
+| iOS client (`ios/`) | Compiled, signed, and **running on a physical iPhone**; pairs and holds encrypted sessions |
 
-The gate is FAIL because the iOS client is unverified: nothing has run on a
-physical iPhone, so three criteria — including the phase's headline "phone scans
-QR, pairs, exchanges an authenticated encrypted ping/pong" — are NOT MEASURED.
-That is a scope failure, not a defect failure.
+P0's headline criterion is measured: the phone scans the QR, pairs, and exchanges
+authenticated encrypted traffic — **14 ms round trip** on the LAN, with the
+pinned key fingerprint matching on both ends.
+
+P1 work in flight is tracked in `docs/p1-plan.md`.
 
 ## Start here
 
 | To… | Read |
 |---|---|
-| Understand the system | `docs/osprey-build-brief.md` — the specification. Its **Amendment Log (A1–A22)** at the end records every approved deviation and supersedes the body where they conflict. |
-| Know exactly where things stand | `artifacts/gate-P0.md` |
-| Finish P0 on the cloud Mac | `docs/ios-build.md` |
+| Understand the system | `docs/osprey-build-brief.md` — the specification. Its **Amendment Log** at the end records every approved deviation and supersedes the body where they conflict. |
+| Know exactly where things stand | `artifacts/gate-P0.md`, then `artifacts/P1/` |
+| See the P1 design decisions | `docs/p1-plan.md` |
+| Build the iOS client | `docs/ios-build.md` |
 | Run what exists today | `docs/setup.md` |
 | Know why a dependency is present | `docs/deps.md` |
 | Work on the code | `CLAUDE.md` — operating rules, architecture invariants, anti-slop rules |
+
+## Install (Windows, elevated once)
+
+```powershell
+osprey-svc.exe install
+```
+
+That is the only interactive prompt the product ever shows. It registers the
+service to start at boot, restarts it on failure, replaces the DACL on
+`%ProgramData%\Osprey` with Administrators + SYSTEM, and creates the inbound
+firewall rule on the **Private** profile only. Nothing has to be launched by
+hand afterwards.
+
+## Branding
+
+`branding/osprey-logo.png` is the source mark. Everything else is generated:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/make-icons.ps1
+```
+
+That writes `branding/osprey.ico` (7 sizes, white keyed out so the taskbar does
+not show a white tile) which `build.rs` embeds into the executable along with
+its version metadata, and `branding/ios/AppIcon-1024.png` (opaque, because App
+Store Connect rejects an icon with an alpha channel).
 
 ## Verify
 

@@ -67,6 +67,8 @@ rule 5's bar.
 | `base64` | Encodes key material in the QR payload and in relay requests, matching the protocol layer's encoding. |
 | `windows` (cfg windows) | M-01 counters (`GetSystemTimes`, `GlobalMemoryStatusEx`, `GetDiskFreeSpaceExW`, `GetIfTable2`) and the installer's two hardening steps: the `%ProgramData%\Osprey` DACL and the firewall rule. Scoped to `cfg(windows)` so the Linux CI build never pulls it. |
 | `windows-service` (cfg windows) | Service lifecycle §4.1 locks: SCM registration, the control handler, status transitions and the recovery actions that satisfy the P1 gate's auto-restart criterion. Hand-rolling `StartServiceCtrlDispatcherW` and the status protocol is not a fifteen-line job and gets the state machine wrong quietly. |
+| `tungstenite` | The relay attachment is a WebSocket, and this is the synchronous client — matching the rest of the agent, which has no async runtime until `webrtc-rs` forces one at P5. Taken with `native-tls` for the same reason as `ureq`: the rustls path pulls `ring`, whose build script breaks the Windows cross-check. Verified: `ring` is still absent from `agent/Cargo.lock`. |
+| `winresource` (build, cfg windows) | Embeds the icon and version metadata into `osprey-svc.exe`. There is no way to stamp a Windows executable without compiling a resource script, and a remote-access agent that appears in Task Manager as a nameless binary is the opposite of what §6.6 requires. Failure is a warning, not a build break, so a contributor without the Windows SDK still gets a working (unbranded) binary. |
 | `tempfile` (dev) | Test isolation. |
 
 `sysinfo` was deliberately **not** used for M-01. It is a large cross-platform

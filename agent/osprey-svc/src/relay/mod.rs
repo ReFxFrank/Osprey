@@ -6,6 +6,11 @@
 //! after that revocation has already taken effect locally, and no answer it
 //! gives can cause the agent to pin, unpin, or trust anything. A LAN pairing
 //! works with this module never being called at all.
+//!
+//! [`link`] holds the persistent WebSocket attachment, which carries opaque
+//! ciphertext under exactly the same assumption.
+
+pub mod link;
 
 use std::time::Duration;
 
