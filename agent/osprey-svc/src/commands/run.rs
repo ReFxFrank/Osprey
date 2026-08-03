@@ -16,6 +16,7 @@ use crate::host::Host;
 use crate::lan::{LanListener, DEFAULT_LAN_PORT};
 use crate::metrics::MetricsEngine;
 use crate::registry::{spawn_revocation_watcher, SessionRegistry, REVOCATION_POLL_INTERVAL};
+use crate::relay::supervisor;
 use crate::revoke::RevocationHandler;
 use crate::session::{self, SessionConfig, SESSION_IDLE_TIMEOUT, SESSION_WRITE_TIMEOUT};
 use crate::state::HostState;
@@ -83,6 +84,16 @@ pub fn execute(
     // Started before the accept loop so the ring is already filling when the
     // first controller connects and asks for history.
     let metrics = MetricsEngine::start();
+
+    // An agent that has never enrolled is LAN-only by design (amendment A6),
+    // so no relay is not a failure — it is the pairing mode the P0 gate used.
+    let relay_supervisor = match relay_target(host) {
+        Some(target) => supervisor::spawn(target, Arc::clone(&running)),
+        None => {
+            tracing::info!("no relay enrolment; serving the local network only");
+            None
+        }
+    };
     let registry = SessionRegistry::new();
     let watcher = spawn_revocation_watcher(
         host.layout.state.clone(),
@@ -164,7 +175,39 @@ pub fn execute(
     if let Err(err) = watcher.join() {
         tracing::error!(?err, "the revocation watcher thread did not exit cleanly");
     }
+    if let Some(handle) = relay_supervisor {
+        if handle.join().is_err() {
+            tracing::error!("the relay supervisor thread panicked");
+        }
+    }
     result
+}
+
+/// Where this agent should attach, if it has enrolled at all.
+///
+/// A missing token with a recorded enrolment is a real inconsistency — the
+/// keystore and `state.json` have diverged — so it is reported rather than
+/// quietly treated as "LAN only".
+fn relay_target(host: &Host) -> Option<supervisor::RelayTarget> {
+    let enrolment = host.state.relay()?;
+    match host.relay_token() {
+        Ok(Some(token)) => Some(supervisor::RelayTarget {
+            base_url: enrolment.base_url.clone(),
+            token,
+        }),
+        Ok(None) => {
+            tracing::error!(
+                relay = %enrolment.base_url,
+                "this agent is enrolled with a relay but its sealed token is missing; \
+                 re-run `osprey-svc pair` to enrol again"
+            );
+            None
+        }
+        Err(err) => {
+            tracing::error!(error = %err, "could not read the sealed relay token");
+            None
+        }
+    }
 }
 
 /// What one session thread borrows from `execute` for its whole life.

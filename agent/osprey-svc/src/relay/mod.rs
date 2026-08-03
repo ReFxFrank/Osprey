@@ -11,6 +11,7 @@
 //! ciphertext under exactly the same assumption.
 
 pub mod link;
+pub mod supervisor;
 
 use std::time::Duration;
 
