@@ -86,6 +86,7 @@ pub fn execute(
     let config = SessionConfig {
         device_id: host.state.device_id(),
         software_version: env!("CARGO_PKG_VERSION").to_owned(),
+        display_name: crate::session::machine_display_name(),
     };
     let revocation = RevocationHandler::new(
         &host.layout.state,

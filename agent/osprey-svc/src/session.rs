@@ -30,6 +30,19 @@ pub const MAX_SESSION_MESSAGE_LEN: usize = 64 * 1024;
 pub struct SessionConfig {
     pub device_id: Uuid,
     pub software_version: String,
+    /// Machine name for the client's device list (amendment A23). `None` when
+    /// the platform offers nothing — the field is optional on the wire and the
+    /// client falls back to its own label.
+    pub display_name: Option<String>,
+}
+
+/// The interactive machine name, or `None` if the platform does not say.
+///
+/// `COMPUTERNAME` is set by Windows itself for every process; `HOSTNAME` is a
+/// shell convention and often absent, which is fine — this is display-only.
+pub fn machine_display_name() -> Option<String> {
+    let var = if cfg!(windows) { "COMPUTERNAME" } else { "HOSTNAME" };
+    std::env::var(var).ok().filter(|name| !name.is_empty())
 }
 
 /// How a served session ended. Every variant is an ordinary outcome; a dropped
@@ -140,6 +153,7 @@ pub fn serve<S: Read + Write>(
             device_id: config.device_id,
             software_version: config.software_version.clone(),
             session_id,
+            display_name: config.display_name.clone(),
         }),
     )?;
 

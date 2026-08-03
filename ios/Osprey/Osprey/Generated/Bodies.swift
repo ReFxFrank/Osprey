@@ -81,13 +81,16 @@ public struct HelloOkBody: OspreyMessageBody {
     public var softwareVersion: String
     /// Identifies this session in the host audit log, which records start/stop with duration and peer device id (brief §6.4).
     public var sessionId: UUID
+    /// Human-readable machine name for the client's device list and dashboard title (amendment A23). Optional so a peer predating this field still speaks. Display-only text — never an identifier.
+    public var displayName: String?
 
-    public init(protocolVersion: UInt32, capabilities: [Capability], deviceId: UUID, softwareVersion: String, sessionId: UUID) {
+    public init(protocolVersion: UInt32, capabilities: [Capability], deviceId: UUID, softwareVersion: String, sessionId: UUID, displayName: String?) {
         self.protocolVersion = protocolVersion
         self.capabilities = capabilities
         self.deviceId = deviceId
         self.softwareVersion = softwareVersion
         self.sessionId = sessionId
+        self.displayName = displayName
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -96,6 +99,7 @@ public struct HelloOkBody: OspreyMessageBody {
         case deviceId = "device_id"
         case softwareVersion = "software_version"
         case sessionId = "session_id"
+        case displayName = "display_name"
     }
 }
 
@@ -270,6 +274,125 @@ public struct PairRevokeBody: OspreyMessageBody {
         case issuedAt = "issued_at"
         case nonce = "nonce"
         case signature = "signature"
+    }
+}
+
+/// Client → agent. Opens (or replaces) the session's metrics stream. At most one subscription is active per session; a new subscribe supersedes the previous one, and `stream = false` doubles as unsubscribe — which is what keeps the metrics registry at its three reserved names (Gate P10 forbids new message types). The correlated response is a `metrics.history` body carrying the requested backfill; if `stream` is true, uncorrelated `metrics.tick` pushes follow at ~1 Hz (brief M-01) carrying this request's envelope id as `sub`.
+/// Wire type: `metrics.subscribe`.
+public struct MetricsSubscribeBody: OspreyMessageBody {
+    public static let messageType: MessageType = .metricsSubscribe
+
+    /// How much ring-buffer history the correlated `metrics.history` response should carry. 0 means none — the response then has empty sample arrays. The agent may serve less than requested (it only holds 24 h) and may decimate; `interval_ms` in the response is authoritative.
+    public var backfillSeconds: UInt32
+    /// True: push `metrics.tick` at the live cadence until superseded or the session ends. False: one-shot history query, and cancels any active stream.
+    public var stream: Bool
+
+    public init(backfillSeconds: UInt32, stream: Bool) {
+        self.backfillSeconds = backfillSeconds
+        self.stream = stream
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case backfillSeconds = "backfill_seconds"
+        case stream = "stream"
+    }
+}
+
+/// Agent → client, uncorrelated server-push (§5.1's stream model): carries the `sub` id of the subscribe that opened the stream rather than answering any envelope. One whole-machine sample. Disk arrays are parallel by index — the schema DSL has no nested structs, deliberately (it keeps both decoders trivial), so structured data rides as parallel arrays.
+/// Wire type: `metrics.tick`.
+public struct MetricsTickBody: OspreyMessageBody {
+    public static let messageType: MessageType = .metricsTick
+
+    /// Envelope id of the `metrics.subscribe` that opened this stream. A client ignores ticks for a `sub` it no longer tracks — they can be in flight when a new subscribe supersedes the old one.
+    public var sub: UUID
+    /// Sample time, milliseconds since the Unix epoch. Distinct from the envelope's send-time `ts`.
+    public var ts: Int64
+    /// Whole-machine CPU utilisation, 0–100, across all logical processors.
+    public var cpuPercent: Double
+    /// Physical memory in use.
+    public var memUsedBytes: UInt64
+    /// Physical memory installed.
+    public var memTotalBytes: UInt64
+    /// Fixed-volume labels (e.g. "C:"), parallel with the two disk arrays.
+    public var diskLabels: [String]
+    /// Used bytes per volume, parallel with `disk_labels`.
+    public var diskUsedBytes: [UInt64]
+    /// Capacity per volume, parallel with `disk_labels`.
+    public var diskTotalBytes: [UInt64]
+    /// Aggregate receive rate across physical interfaces since the previous sample. Per-interface detail is M-16 (`net.interfaces`), not this message.
+    public var netRxBytesPerSec: UInt64
+    /// Aggregate transmit rate across physical interfaces since the previous sample.
+    public var netTxBytesPerSec: UInt64
+
+    public init(sub: UUID, ts: Int64, cpuPercent: Double, memUsedBytes: UInt64, memTotalBytes: UInt64, diskLabels: [String], diskUsedBytes: [UInt64], diskTotalBytes: [UInt64], netRxBytesPerSec: UInt64, netTxBytesPerSec: UInt64) {
+        self.sub = sub
+        self.ts = ts
+        self.cpuPercent = cpuPercent
+        self.memUsedBytes = memUsedBytes
+        self.memTotalBytes = memTotalBytes
+        self.diskLabels = diskLabels
+        self.diskUsedBytes = diskUsedBytes
+        self.diskTotalBytes = diskTotalBytes
+        self.netRxBytesPerSec = netRxBytesPerSec
+        self.netTxBytesPerSec = netTxBytesPerSec
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sub = "sub"
+        case ts = "ts"
+        case cpuPercent = "cpu_percent"
+        case memUsedBytes = "mem_used_bytes"
+        case memTotalBytes = "mem_total_bytes"
+        case diskLabels = "disk_labels"
+        case diskUsedBytes = "disk_used_bytes"
+        case diskTotalBytes = "disk_total_bytes"
+        case netRxBytesPerSec = "net_rx_bytes_per_sec"
+        case netTxBytesPerSec = "net_tx_bytes_per_sec"
+    }
+}
+
+/// Agent → client, and only ever a *response* — it answers `metrics.subscribe` with the requested backfill (correlated by envelope id). Samples are fixed-cadence parallel arrays: `start_ts` plus `interval_ms` locate every sample without a per-sample timestamp array, which is what keeps a 24 h backfill inside the session's message-size cap. The agent decimates (and says so via `interval_ms`) rather than exceeding the cap. Disk usage has no history — it moves too slowly to chart and rides every `metrics.tick` instead.
+/// Wire type: `metrics.history`.
+public struct MetricsHistoryBody: OspreyMessageBody {
+    public static let messageType: MessageType = .metricsHistory
+
+    /// Envelope id of the `metrics.subscribe` this answers, mirroring `metrics.tick`.
+    public var sub: UUID
+    /// Timestamp of the first sample, milliseconds since the Unix epoch. Sample N is at start_ts + N * interval_ms.
+    public var startTs: Int64
+    /// Spacing between samples. The ring buffer's native cadence is 30 s; a larger value means the agent decimated to fit the message cap.
+    public var intervalMs: UInt32
+    /// Whole-machine CPU utilisation per sample, 0–100.
+    public var cpuPercent: [Double]
+    /// Physical memory in use per sample.
+    public var memUsedBytes: [UInt64]
+    /// Physical memory installed. Scalar — capacity does not vary sample to sample.
+    public var memTotalBytes: UInt64
+    /// Aggregate receive rate per sample.
+    public var netRxBytesPerSec: [UInt64]
+    /// Aggregate transmit rate per sample.
+    public var netTxBytesPerSec: [UInt64]
+
+    public init(sub: UUID, startTs: Int64, intervalMs: UInt32, cpuPercent: [Double], memUsedBytes: [UInt64], memTotalBytes: UInt64, netRxBytesPerSec: [UInt64], netTxBytesPerSec: [UInt64]) {
+        self.sub = sub
+        self.startTs = startTs
+        self.intervalMs = intervalMs
+        self.cpuPercent = cpuPercent
+        self.memUsedBytes = memUsedBytes
+        self.memTotalBytes = memTotalBytes
+        self.netRxBytesPerSec = netRxBytesPerSec
+        self.netTxBytesPerSec = netTxBytesPerSec
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sub = "sub"
+        case startTs = "start_ts"
+        case intervalMs = "interval_ms"
+        case cpuPercent = "cpu_percent"
+        case memUsedBytes = "mem_used_bytes"
+        case memTotalBytes = "mem_total_bytes"
+        case netRxBytesPerSec = "net_rx_bytes_per_sec"
+        case netTxBytesPerSec = "net_tx_bytes_per_sec"
     }
 }
 

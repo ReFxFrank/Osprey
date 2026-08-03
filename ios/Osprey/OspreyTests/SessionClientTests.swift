@@ -39,7 +39,8 @@ final class SessionClientTests: XCTestCase {
                     capabilities: [],
                     deviceId: hostDeviceID,
                     softwareVersion: "osprey-svc/0.1.0",
-                    sessionId: sessionID))
+                    sessionId: sessionID,
+                    displayName: nil))
         }
 
         let helloOk = try await client.openSession(

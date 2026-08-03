@@ -52,6 +52,9 @@ pub struct HelloOkBody {
     pub software_version: String,
     /// Identifies this session in the host audit log, which records start/stop with duration and peer device id (brief §6.4).
     pub session_id: uuid::Uuid,
+    /// Human-readable machine name for the client's device list and dashboard title (amendment A23). Optional so a peer predating this field still speaks. Display-only text — never an identifier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
 }
 
 /// Liveness probe and round-trip measurement. Either peer may send it.
@@ -145,5 +148,63 @@ pub struct PairRevokeBody {
     /// Sign_identity("osprey/pair.revoke/v1" || issuer_device_id[16] || revoked_device_id[16] || issued_at as big-endian i64[8] || nonce[32]), by the issuer's pinned identity key.
     #[serde(with = "crate::b64")]
     pub signature: Vec<u8>,
+}
+
+/// Client → agent. Opens (or replaces) the session's metrics stream. At most one subscription is active per session; a new subscribe supersedes the previous one, and `stream = false` doubles as unsubscribe — which is what keeps the metrics registry at its three reserved names (Gate P10 forbids new message types). The correlated response is a `metrics.history` body carrying the requested backfill; if `stream` is true, uncorrelated `metrics.tick` pushes follow at ~1 Hz (brief M-01) carrying this request's envelope id as `sub`.
+/// Wire type: `metrics.subscribe`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MetricsSubscribeBody {
+    /// How much ring-buffer history the correlated `metrics.history` response should carry. 0 means none — the response then has empty sample arrays. The agent may serve less than requested (it only holds 24 h) and may decimate; `interval_ms` in the response is authoritative.
+    pub backfill_seconds: u32,
+    /// True: push `metrics.tick` at the live cadence until superseded or the session ends. False: one-shot history query, and cancels any active stream.
+    pub stream: bool,
+}
+
+/// Agent → client, uncorrelated server-push (§5.1's stream model): carries the `sub` id of the subscribe that opened the stream rather than answering any envelope. One whole-machine sample. Disk arrays are parallel by index — the schema DSL has no nested structs, deliberately (it keeps both decoders trivial), so structured data rides as parallel arrays.
+/// Wire type: `metrics.tick`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MetricsTickBody {
+    /// Envelope id of the `metrics.subscribe` that opened this stream. A client ignores ticks for a `sub` it no longer tracks — they can be in flight when a new subscribe supersedes the old one.
+    pub sub: uuid::Uuid,
+    /// Sample time, milliseconds since the Unix epoch. Distinct from the envelope's send-time `ts`.
+    pub ts: i64,
+    /// Whole-machine CPU utilisation, 0–100, across all logical processors.
+    pub cpu_percent: f64,
+    /// Physical memory in use.
+    pub mem_used_bytes: u64,
+    /// Physical memory installed.
+    pub mem_total_bytes: u64,
+    /// Fixed-volume labels (e.g. "C:"), parallel with the two disk arrays.
+    pub disk_labels: Vec<String>,
+    /// Used bytes per volume, parallel with `disk_labels`.
+    pub disk_used_bytes: Vec<u64>,
+    /// Capacity per volume, parallel with `disk_labels`.
+    pub disk_total_bytes: Vec<u64>,
+    /// Aggregate receive rate across physical interfaces since the previous sample. Per-interface detail is M-16 (`net.interfaces`), not this message.
+    pub net_rx_bytes_per_sec: u64,
+    /// Aggregate transmit rate across physical interfaces since the previous sample.
+    pub net_tx_bytes_per_sec: u64,
+}
+
+/// Agent → client, and only ever a *response* — it answers `metrics.subscribe` with the requested backfill (correlated by envelope id). Samples are fixed-cadence parallel arrays: `start_ts` plus `interval_ms` locate every sample without a per-sample timestamp array, which is what keeps a 24 h backfill inside the session's message-size cap. The agent decimates (and says so via `interval_ms`) rather than exceeding the cap. Disk usage has no history — it moves too slowly to chart and rides every `metrics.tick` instead.
+/// Wire type: `metrics.history`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MetricsHistoryBody {
+    /// Envelope id of the `metrics.subscribe` this answers, mirroring `metrics.tick`.
+    pub sub: uuid::Uuid,
+    /// Timestamp of the first sample, milliseconds since the Unix epoch. Sample N is at start_ts + N * interval_ms.
+    pub start_ts: i64,
+    /// Spacing between samples. The ring buffer's native cadence is 30 s; a larger value means the agent decimated to fit the message cap.
+    pub interval_ms: u32,
+    /// Whole-machine CPU utilisation per sample, 0–100.
+    pub cpu_percent: Vec<f64>,
+    /// Physical memory in use per sample.
+    pub mem_used_bytes: Vec<u64>,
+    /// Physical memory installed. Scalar — capacity does not vary sample to sample.
+    pub mem_total_bytes: u64,
+    /// Aggregate receive rate per sample.
+    pub net_rx_bytes_per_sec: Vec<u64>,
+    /// Aggregate transmit rate per sample.
+    pub net_tx_bytes_per_sec: Vec<u64>,
 }
 

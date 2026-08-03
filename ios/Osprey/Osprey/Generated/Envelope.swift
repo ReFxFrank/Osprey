@@ -90,6 +90,12 @@ public enum MessageBody: Hashable, Sendable {
     case pairConfirm(PairConfirmBody)
     /// `pair.revoke`
     case pairRevoke(PairRevokeBody)
+    /// `metrics.subscribe`
+    case metricsSubscribe(MetricsSubscribeBody)
+    /// `metrics.tick`
+    case metricsTick(MetricsTickBody)
+    /// `metrics.history`
+    case metricsHistory(MetricsHistoryBody)
 
     /// The registry type this body belongs to.
     public var messageType: MessageType {
@@ -103,6 +109,9 @@ public enum MessageBody: Hashable, Sendable {
         case .pairRequest: return .pairRequest
         case .pairConfirm: return .pairConfirm
         case .pairRevoke: return .pairRevoke
+        case .metricsSubscribe: return .metricsSubscribe
+        case .metricsTick: return .metricsTick
+        case .metricsHistory: return .metricsHistory
         }
     }
 }
@@ -212,6 +221,15 @@ public enum OspreyProtocol {
         case .pairRevoke:
             let decoded = try decoder.decode(Envelope<PairRevokeBody>.self, from: data)
             body = .pairRevoke(decoded.body)
+        case .metricsSubscribe:
+            let decoded = try decoder.decode(Envelope<MetricsSubscribeBody>.self, from: data)
+            body = .metricsSubscribe(decoded.body)
+        case .metricsTick:
+            let decoded = try decoder.decode(Envelope<MetricsTickBody>.self, from: data)
+            body = .metricsTick(decoded.body)
+        case .metricsHistory:
+            let decoded = try decoder.decode(Envelope<MetricsHistoryBody>.self, from: data)
+            body = .metricsHistory(decoded.body)
         default:
             throw OspreyProtocolError.bodyDeferred(header.t)
         }

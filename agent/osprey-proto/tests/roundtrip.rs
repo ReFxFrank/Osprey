@@ -9,8 +9,9 @@
 
 use osprey_proto::{
     Body, ByeBody, ByeReason, Capability, Channel, ErrorBody, ErrorCode, Envelope, HelloBody,
-    HelloOkBody, IdentityAlgorithm, MessageType, PairConfirmBody, PairRequestBody, PairRevokeBody,
-    PingBody, PongBody, ProtoError, MIN_PROTOCOL_VERSION, PROTOCOL_VERSION,
+    HelloOkBody, IdentityAlgorithm, MessageType, MetricsHistoryBody, MetricsSubscribeBody,
+    MetricsTickBody, PairConfirmBody, PairRequestBody, PairRevokeBody, PingBody, PongBody,
+    ProtoError, MIN_PROTOCOL_VERSION, PROTOCOL_VERSION,
 };
 use std::str::FromStr;
 use uuid::Uuid;
@@ -39,6 +40,15 @@ fn samples() -> Vec<Body> {
             device_id: device,
             software_version: "0.1.0".to_owned(),
             session_id: Uuid::from_u128(7),
+            display_name: None,
+        }),
+        Body::HelloOk(HelloOkBody {
+            protocol_version: PROTOCOL_VERSION,
+            capabilities: vec![Capability::Metrics],
+            device_id: device,
+            software_version: "0.1.0".to_owned(),
+            session_id: Uuid::from_u128(7),
+            display_name: Some("WORKSTATION".to_owned()),
         }),
         Body::Ping(PingBody { seq: u64::MAX }),
         Body::Pong(PongBody {
@@ -77,6 +87,32 @@ fn samples() -> Vec<Body> {
             issued_at: 1_738_000_000_000,
             nonce: vec![0x5a; 32],
             signature: vec![0x77; 64],
+        }),
+        Body::MetricsSubscribe(MetricsSubscribeBody {
+            backfill_seconds: 86_400,
+            stream: true,
+        }),
+        Body::MetricsTick(MetricsTickBody {
+            sub: Uuid::from_u128(42),
+            ts: 1_738_000_000_000,
+            cpu_percent: 12.5,
+            mem_used_bytes: 17_179_869_184,
+            mem_total_bytes: 34_359_738_368,
+            disk_labels: vec!["C:".to_owned(), "D:".to_owned()],
+            disk_used_bytes: vec![500_000_000_000, 0],
+            disk_total_bytes: vec![1_000_000_000_000, 2_000_000_000_000],
+            net_rx_bytes_per_sec: 1_048_576,
+            net_tx_bytes_per_sec: 65_536,
+        }),
+        Body::MetricsHistory(MetricsHistoryBody {
+            sub: Uuid::from_u128(42),
+            start_ts: 1_737_913_600_000,
+            interval_ms: 30_000,
+            cpu_percent: vec![0.0, 55.5, 100.0],
+            mem_used_bytes: vec![1, 2, 3],
+            mem_total_bytes: 34_359_738_368,
+            net_rx_bytes_per_sec: vec![0, 10, 20],
+            net_tx_bytes_per_sec: vec![5, 15, 25],
         }),
     ]
 }
@@ -226,10 +262,12 @@ fn missing_body_field_reports_the_message_type() {
 
 #[test]
 fn deferred_type_reports_that_its_body_is_undefined() {
-    let json = r#"{"v":1,"id":"00000000-0000-0000-0000-000000000000","t":"metrics.tick","ts":0,"body":{"cpu":1}}"#;
+    // metrics.tick held this role until P1 defined its body; proc.list stays
+    // deferred until P2.
+    let json = r#"{"v":1,"id":"00000000-0000-0000-0000-000000000000","t":"proc.list","ts":0,"body":{"sort":"cpu"}}"#;
     let envelope: Envelope = serde_json::from_str(json).expect("envelope parses");
     match envelope.decode_body() {
-        Err(ProtoError::BodyDeferred(t)) => assert_eq!(t, MessageType::MetricsTick),
+        Err(ProtoError::BodyDeferred(t)) => assert_eq!(t, MessageType::ProcList),
         other => panic!("expected BodyDeferred, got {other:?}"),
     }
 }

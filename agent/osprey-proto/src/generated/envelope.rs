@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::bodies::{ByeBody, ErrorBody, HelloBody, HelloOkBody, PairConfirmBody, PairRequestBody, PairRevokeBody, PingBody, PongBody};
+use super::bodies::{ByeBody, ErrorBody, HelloBody, HelloOkBody, MetricsHistoryBody, MetricsSubscribeBody, MetricsTickBody, PairConfirmBody, PairRequestBody, PairRevokeBody, PingBody, PongBody};
 use super::registry::MessageType;
 use crate::error::ProtoError;
 
@@ -52,6 +52,12 @@ pub enum Body {
     PairConfirm(PairConfirmBody),
     /// `pair.revoke`
     PairRevoke(PairRevokeBody),
+    /// `metrics.subscribe`
+    MetricsSubscribe(MetricsSubscribeBody),
+    /// `metrics.tick`
+    MetricsTick(MetricsTickBody),
+    /// `metrics.history`
+    MetricsHistory(MetricsHistoryBody),
 }
 
 impl Body {
@@ -67,6 +73,9 @@ impl Body {
             Self::PairRequest(_) => MessageType::PairRequest,
             Self::PairConfirm(_) => MessageType::PairConfirm,
             Self::PairRevoke(_) => MessageType::PairRevoke,
+            Self::MetricsSubscribe(_) => MessageType::MetricsSubscribe,
+            Self::MetricsTick(_) => MessageType::MetricsTick,
+            Self::MetricsHistory(_) => MessageType::MetricsHistory,
         }
     }
 }
@@ -106,6 +115,9 @@ impl Envelope {
             MessageType::PairRequest => decode(self.t, &self.body).map(Body::PairRequest),
             MessageType::PairConfirm => decode(self.t, &self.body).map(Body::PairConfirm),
             MessageType::PairRevoke => decode(self.t, &self.body).map(Body::PairRevoke),
+            MessageType::MetricsSubscribe => decode(self.t, &self.body).map(Body::MetricsSubscribe),
+            MessageType::MetricsTick => decode(self.t, &self.body).map(Body::MetricsTick),
+            MessageType::MetricsHistory => decode(self.t, &self.body).map(Body::MetricsHistory),
             other => Err(ProtoError::BodyDeferred(other)),
         }
     }

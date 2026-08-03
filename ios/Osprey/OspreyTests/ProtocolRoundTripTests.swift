@@ -18,7 +18,13 @@ final class ProtocolRoundTripTests: XCTestCase {
             .helloOk(
                 HelloOkBody(
                     protocolVersion: 1, capabilities: [], deviceId: deviceID,
-                    softwareVersion: "osprey-svc/0.1.0", sessionId: UUID())),
+                    softwareVersion: "osprey-svc/0.1.0", sessionId: UUID(),
+                    displayName: "WORKSTATION")),
+            .helloOk(
+                HelloOkBody(
+                    protocolVersion: 1, capabilities: [], deviceId: deviceID,
+                    softwareVersion: "osprey-svc/0.1.0", sessionId: UUID(),
+                    displayName: nil)),
             .ping(PingBody(seq: 42)),
             .pong(PongBody(seq: 42, echoTs: 1_700_000_000_000)),
             .bye(ByeBody(reason: .unpaired, detail: "pin removed")),
@@ -27,7 +33,22 @@ final class ProtocolRoundTripTests: XCTestCase {
                     issuerDeviceId: deviceID, revokedDeviceId: deviceID,
                     issuedAt: 1_700_000_000_000,
                     nonce: Data(repeating: 0x5A, count: 32),
-                    signature: Data(repeating: 0x7B, count: 70)))
+                    signature: Data(repeating: 0x7B, count: 70))),
+            .metricsSubscribe(MetricsSubscribeBody(backfillSeconds: 86_400, stream: true)),
+            .metricsTick(
+                MetricsTickBody(
+                    sub: deviceID, ts: 1_700_000_000_000, cpuPercent: 12.5,
+                    memUsedBytes: 17_179_869_184, memTotalBytes: 34_359_738_368,
+                    diskLabels: ["C:", "D:"],
+                    diskUsedBytes: [500_000_000_000, 0],
+                    diskTotalBytes: [1_000_000_000_000, 2_000_000_000_000],
+                    netRxBytesPerSec: 1_048_576, netTxBytesPerSec: 65_536)),
+            .metricsHistory(
+                MetricsHistoryBody(
+                    sub: deviceID, startTs: 1_699_913_600_000, intervalMs: 30_000,
+                    cpuPercent: [0.0, 55.5, 100.0],
+                    memUsedBytes: [1, 2, 3], memTotalBytes: 34_359_738_368,
+                    netRxBytesPerSec: [0, 10, 20], netTxBytesPerSec: [5, 15, 25]))
         ]
 
         for body in bodies {

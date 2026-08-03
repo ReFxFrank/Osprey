@@ -931,3 +931,15 @@ register's own warning: retrofitting a list under an app built single-host
 touches every management screen, which is the expensive direction of that
 mistake. The schema is unchanged — A11's `devices.kind` plus the `pairings`
 join already supports N agents per account.
+
+### A24 — `hello.ok` gains an optional `display_name` field (P1)
+
+The A23 device list surfaced a gap: nothing on the wire carries a
+human-readable machine name. `pair.confirm.display_name` was specified for it,
+but the shipped pairing flow exchanges the core's raw identity messages, not
+`pair.confirm` envelopes — so no name ever reaches the phone. **Amendment:**
+`hello.ok` carries an optional `display_name` (the agent sends its machine
+name, e.g. `COMPUTERNAME`). A field addition to an existing body is
+forward-compatible on both generated decoders and is not a new message type,
+so the P10 zero-new-messages gate is unaffected. Display-only text — never an
+identifier.

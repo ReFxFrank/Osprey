@@ -74,7 +74,8 @@ the relay is untrusted and must not be able to substitute a key."""
 [[groups]]
 name = "metrics"
 doc = "CPU/RAM/disk/network/GPU telemetry (M-01, M-02, M-03)."
-deferred = ["metrics.subscribe", "metrics.tick", "metrics.history"]
+# P1 defines bodies for all three reserved names. GPU/sensor telemetry (M-02,
+# M-03) will extend these bodies with optional fields, not new message types.
 
 [[groups]]
 name = "process"
@@ -265,6 +266,7 @@ fields = [
   { name = "device_id", type = "uuid", doc = "Responder's device id, as pinned at pairing." },
   { name = "software_version", type = "string", doc = "Responder build version." },
   { name = "session_id", type = "uuid", doc = "Identifies this session in the host audit log, which records start/stop with duration and peer device id (brief §6.4)." },
+  { name = "display_name", type = "string", optional = true, doc = "Human-readable machine name for the client's device list and dashboard title (amendment A23). Optional so a peer predating this field still speaks. Display-only text — never an identifier." },
 ]
 
 [[messages]]
@@ -357,4 +359,71 @@ fields = [
   { name = "issued_at", type = "i64", doc = "Signing time, milliseconds since the Unix epoch. Covered by the signature. Receivers reject revocations far outside their own clock window." },
   { name = "nonce", type = "bytes", doc = "32 random bytes. Covered by the signature; the receiver rejects a nonce it has already accepted, so a captured revocation cannot be replayed after re-pairing." },
   { name = "signature", type = "bytes", doc = "Sign_identity(\"osprey/pair.revoke/v1\" || issuer_device_id[16] || revoked_device_id[16] || issued_at as big-endian i64[8] || nonce[32]), by the issuer's pinned identity key." },
+]
+
+[[messages]]
+type = "metrics.subscribe"
+group = "metrics"
+rust_name = "MetricsSubscribeBody"
+swift_name = "MetricsSubscribeBody"
+doc = """
+Client → agent. Opens (or replaces) the session's metrics stream. At most one \
+subscription is active per session; a new subscribe supersedes the previous \
+one, and `stream = false` doubles as unsubscribe — which is what keeps the \
+metrics registry at its three reserved names (Gate P10 forbids new message \
+types). The correlated response is a `metrics.history` body carrying the \
+requested backfill; if `stream` is true, uncorrelated `metrics.tick` pushes \
+follow at ~1 Hz (brief M-01) carrying this request's envelope id as `sub`."""
+fields = [
+  { name = "backfill_seconds", type = "u32", doc = "How much ring-buffer history the correlated `metrics.history` response should carry. 0 means none — the response then has empty sample arrays. The agent may serve less than requested (it only holds 24 h) and may decimate; `interval_ms` in the response is authoritative." },
+  { name = "stream", type = "bool", doc = "True: push `metrics.tick` at the live cadence until superseded or the session ends. False: one-shot history query, and cancels any active stream." },
+]
+
+[[messages]]
+type = "metrics.tick"
+group = "metrics"
+rust_name = "MetricsTickBody"
+swift_name = "MetricsTickBody"
+doc = """
+Agent → client, uncorrelated server-push (§5.1's stream model): carries the \
+`sub` id of the subscribe that opened the stream rather than answering any \
+envelope. One whole-machine sample. Disk arrays are parallel by index — the \
+schema DSL has no nested structs, deliberately (it keeps both decoders \
+trivial), so structured data rides as parallel arrays."""
+fields = [
+  { name = "sub", type = "uuid", doc = "Envelope id of the `metrics.subscribe` that opened this stream. A client ignores ticks for a `sub` it no longer tracks — they can be in flight when a new subscribe supersedes the old one." },
+  { name = "ts", type = "i64", doc = "Sample time, milliseconds since the Unix epoch. Distinct from the envelope's send-time `ts`." },
+  { name = "cpu_percent", type = "f64", doc = "Whole-machine CPU utilisation, 0–100, across all logical processors." },
+  { name = "mem_used_bytes", type = "u64", doc = "Physical memory in use." },
+  { name = "mem_total_bytes", type = "u64", doc = "Physical memory installed." },
+  { name = "disk_labels", type = "[string]", doc = "Fixed-volume labels (e.g. \"C:\"), parallel with the two disk arrays." },
+  { name = "disk_used_bytes", type = "[u64]", doc = "Used bytes per volume, parallel with `disk_labels`." },
+  { name = "disk_total_bytes", type = "[u64]", doc = "Capacity per volume, parallel with `disk_labels`." },
+  { name = "net_rx_bytes_per_sec", type = "u64", doc = "Aggregate receive rate across physical interfaces since the previous sample. Per-interface detail is M-16 (`net.interfaces`), not this message." },
+  { name = "net_tx_bytes_per_sec", type = "u64", doc = "Aggregate transmit rate across physical interfaces since the previous sample." },
+]
+
+[[messages]]
+type = "metrics.history"
+group = "metrics"
+rust_name = "MetricsHistoryBody"
+swift_name = "MetricsHistoryBody"
+doc = """
+Agent → client, and only ever a *response* — it answers `metrics.subscribe` \
+with the requested backfill (correlated by envelope id). Samples are \
+fixed-cadence parallel arrays: `start_ts` plus `interval_ms` locate every \
+sample without a per-sample timestamp array, which is what keeps a 24 h \
+backfill inside the session's message-size cap. The agent decimates (and says \
+so via `interval_ms`) rather than exceeding the cap. Disk usage has no \
+history — it moves too slowly to chart and rides every `metrics.tick` \
+instead."""
+fields = [
+  { name = "sub", type = "uuid", doc = "Envelope id of the `metrics.subscribe` this answers, mirroring `metrics.tick`." },
+  { name = "start_ts", type = "i64", doc = "Timestamp of the first sample, milliseconds since the Unix epoch. Sample N is at start_ts + N * interval_ms." },
+  { name = "interval_ms", type = "u32", doc = "Spacing between samples. The ring buffer's native cadence is 30 s; a larger value means the agent decimated to fit the message cap." },
+  { name = "cpu_percent", type = "[f64]", doc = "Whole-machine CPU utilisation per sample, 0–100." },
+  { name = "mem_used_bytes", type = "[u64]", doc = "Physical memory in use per sample." },
+  { name = "mem_total_bytes", type = "u64", doc = "Physical memory installed. Scalar — capacity does not vary sample to sample." },
+  { name = "net_rx_bytes_per_sec", type = "[u64]", doc = "Aggregate receive rate per sample." },
+  { name = "net_tx_bytes_per_sec", type = "[u64]", doc = "Aggregate transmit rate per sample." },
 ]
