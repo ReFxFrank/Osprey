@@ -655,7 +655,7 @@ tether/
 | 8 | Code signing cert: EV or standard | P9 | open |
 | 9 | Session indicator style | P6 | open |
 | 10 | Default file-browser denylist paths | P3 | open |
-| 11 | How many hosts at 1.0 — one, or a device list from the start? | P1 (UI shape) | open |
+| 11 | ~~How many hosts at 1.0 — one, or a device list from the start?~~ | — | **resolved: device list from the start (A23)** |
 | 12 | Write `docs/app-review.md` now or defer to actual public release? | P9 | open |
 | 13 | Build P10 desktop client, or stop at 1.0? | P10 | open |
 
@@ -919,3 +919,15 @@ Pinned by, and reproducible from:
 The constants are defined (privately, not exported) in `agent/osprey-core/src/identity.rs` as `CROSS_SIG_CONTEXT` and
 `SignedBytes.crossCertificateContext`; the layouts at
 `cross_sig_message`, mirrored in Swift by `SignedBytes.crossCertificate`. Callers outside the crate obtain the bytes through the exported `cross_certificate_bytes(...)` rather than rebuilding them.
+
+### A23 — 1.0 opens to a device list (closes `TODO(frank)` #11)
+
+Owner decision, 2026-08-03, made at the P0→P1 gate: the app's root screen is a
+**device list** with tap-through to a per-machine dashboard — not a single-host
+view. Two reasons. First, P8's preferred wake-on-LAN design already assumes a
+second always-on agent on the LAN acting as wake proxy, so multiple devices per
+account is a shipped 1.0 scenario rather than a hypothetical. Second, the
+register's own warning: retrofitting a list under an app built single-host
+touches every management screen, which is the expensive direction of that
+mistake. The schema is unchanged — A11's `devices.kind` plus the `pairings`
+join already supports N agents per account.
