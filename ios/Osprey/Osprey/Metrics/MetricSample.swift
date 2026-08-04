@@ -98,15 +98,12 @@ extension MetricsHistoryBody {
 
 /// Human-readable byte counts, for axis labels and captions.
 public enum ByteFormat {
-    private static let formatter: ByteCountFormatter = {
-        let formatter = ByteCountFormatter()
-        formatter.countStyle = .memory
-        formatter.allowsNonnumericFormatting = false
-        return formatter
-    }()
-
+    /// `ByteCountFormatStyle` rather than a shared `ByteCountFormatter`: the
+    /// latter is a mutable class, so a `static let` of one is not
+    /// concurrency-safe and Swift 6 rejects it outright. The format style is a
+    /// value type, so there is nothing to share.
     public static func string(_ bytes: UInt64) -> String {
-        formatter.string(fromByteCount: Int64(clamping: bytes))
+        Int64(clamping: bytes).formatted(.byteCount(style: .memory))
     }
 
     public static func rate(_ bytesPerSecond: UInt64?) -> String {
