@@ -127,6 +127,19 @@ public final class DeviceModel: Identifiable, Hashable {
     /// and redrawing (§9.3).
     public func refreshAfterForeground() async {
         guard shouldStayConnected else { return }
+
+        // Probe before redialling. `scenePhase` becomes `.active` again for
+        // reasons that have nothing to do with the app having been suspended —
+        // a notification banner, Control Centre, the screenshot UI — and a
+        // teardown here costs a working session, its metrics subscription and
+        // the live chart. Measured on the device: sessions were being closed
+        // 5 and 14 seconds after opening, and the host logged them as clean
+        // client-initiated goodbyes.
+        if isConnected {
+            await sendPing()
+            if isConnected { return }
+        }
+
         await tearDown()
         connection = .connecting
         await connect()
@@ -148,7 +161,10 @@ public final class DeviceModel: Identifiable, Hashable {
             connection = .connected(connected)
         } catch {
             let message = error.localizedMessage
-            await disconnect()
+            // `tearDown`, not `disconnect`: the operator still wants this
+            // machine connected, and clearing that intent would stop the
+            // foreground refresh from ever redialling it.
+            await tearDown()
             connection = .failed(message)
         }
     }
