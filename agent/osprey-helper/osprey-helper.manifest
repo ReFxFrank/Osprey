@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  Brief §9.5 requires the helper to be PerMonitorV2 DPI-aware from P1, not P6.
+
+  Without it Windows lies to the process about the desktop: a virtual-desktop
+  coordinate on a scaled display comes back in the wrong units, and every
+  captured frame and injected click is silently misplaced. It is declared here
+  rather than called at runtime because SetProcessDpiAwarenessContext has to win
+  a race against the first window any library creates, and a manifest cannot
+  lose that race.
+
+  Two elements on purpose: the 2016 `dpiAwareness` is what Windows 10 1703 and
+  later read, and the 2005 `dpiAware` is the fallback for anything older that
+  understands only system-wide awareness.
+
+  `asInvoker` is deliberate and load-bearing: this process runs as the logged-in
+  user, in their session, with their privileges. A helper that asked for
+  elevation would put a UAC prompt in front of every login.
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity type="win32" name="Osprey.Helper" version="1.0.0.0"/>
+
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
+    </windowsSettings>
+  </application>
+
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <!-- Windows 10 and 11. PerMonitorV2 is ignored without this. -->
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+    </application>
+  </compatibility>
+
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+</assembly>

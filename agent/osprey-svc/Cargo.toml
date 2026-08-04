@@ -68,6 +68,16 @@ windows = { version = "0.62", features = [
     # that cfg and nothing here calls them.
     "Win32_System_Com",
     "Win32_NetworkManagement_WindowsFirewall",
+    # Launching the helper into the interactive session. WTSGetActiveConsoleSessionId
+    # lives under RemoteDesktop despite linking kernel32, and CreateProcessAsUserW
+    # is gated on Win32_Security *in addition* to Win32_System_Threading.
+    "Win32_System_RemoteDesktop",
+    "Win32_System_Environment",
+    # The helper pipe. Win32_System_IO is not optional: ConnectNamedPipe,
+    # ReadFile and WriteFile are all gated on it because of their OVERLAPPED
+    # parameter, even when that parameter is None.
+    "Win32_System_Pipes",
+    "Win32_System_IO",
 ] }
 windows-service = "0.8"
 

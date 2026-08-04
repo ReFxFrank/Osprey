@@ -3,9 +3,36 @@ name = "osprey-helper"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Osprey user-session helper: tray, capture and input injection. P1 deliverable."
+description = "Osprey user-session helper: runs in the interactive session, where the service cannot."
 publish = false
 
 [lib]
 name = "osprey_helper"
 path = "src/lib.rs"
+
+[[bin]]
+name = "osprey-helper"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+clap = { version = "4", features = ["derive"] }
+
+[target.'cfg(windows)'.dependencies]
+# The helper's whole job is to be a process in the interactive session, so it
+# talks to the service over a named pipe and (from P4) to the desktop.
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Pipes",
+    "Win32_Security",
+] }
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
+[dev-dependencies]
+tempfile = "3"

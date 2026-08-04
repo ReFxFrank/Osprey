@@ -1325,6 +1325,16 @@ dependencies = [
 [[package]]
 name = "osprey-helper"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "tempfile",
+ "thiserror",
+ "tracing",
+ "tracing-subscriber",
+ "windows",
+ "winresource",
+]
 
 [[package]]
 name = "osprey-proto"

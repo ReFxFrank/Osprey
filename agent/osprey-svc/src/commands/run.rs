@@ -87,6 +87,27 @@ pub fn execute(
 
     // An agent that has never enrolled is LAN-only by design (amendment A6),
     // so no relay is not a failure — it is the pairing mode the P0 gate used.
+    // The helper is what makes anything visual possible later; in P1 it simply
+    // has to be there, and stay there, in whatever session the user is in.
+    let helper_status = Arc::new(crate::helper::supervisor::HelperStatus::default());
+    let helper_supervisor = match crate::helper::helper_executable() {
+        Ok(exe) if exe.exists() => crate::helper::supervisor::spawn(
+            exe,
+            Arc::clone(&running),
+            Arc::clone(&helper_status),
+        ),
+        Ok(exe) => {
+            // Named rather than silently skipped: a service running without its
+            // helper looks healthy right up until someone asks for a screen.
+            tracing::error!(path = %exe.display(), "the session helper is missing; not supervising it");
+            None
+        }
+        Err(err) => {
+            tracing::error!(error = %err, "could not locate the session helper");
+            None
+        }
+    };
+
     let relay_status = Arc::new(supervisor::RelayStatus::default());
     let relay_supervisor = match relay_target(host) {
         Some(target) => supervisor::spawn(target, Arc::clone(&running), Arc::clone(&relay_status)),
@@ -179,6 +200,11 @@ pub fn execute(
     if let Some(handle) = relay_supervisor {
         if handle.join().is_err() {
             tracing::error!("the relay supervisor thread panicked");
+        }
+    }
+    if let Some(handle) = helper_supervisor {
+        if handle.join().is_err() {
+            tracing::error!("the helper supervisor thread panicked");
         }
     }
     result
