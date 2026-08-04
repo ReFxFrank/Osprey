@@ -31,16 +31,18 @@ final class SessionClientTests: XCTestCase {
         let client = try await Self.makeClient { request in
             let header = try OspreyProtocol.decodeHeader(request)
             XCTAssertEqual(header.t, .hello)
-            return try OspreyProtocol.encode(
-                id: header.id,
-                ts: header.ts,
-                body: HelloOkBody(
-                    protocolVersion: 1,
-                    capabilities: [],
-                    deviceId: hostDeviceID,
-                    softwareVersion: "osprey-svc/0.1.0",
-                    sessionId: sessionID,
-                    displayName: nil))
+            return [
+                try OspreyProtocol.encode(
+                    id: header.id,
+                    ts: header.ts,
+                    body: HelloOkBody(
+                        protocolVersion: 1,
+                        capabilities: [],
+                        deviceId: hostDeviceID,
+                        softwareVersion: "osprey-svc/0.1.0",
+                        sessionId: sessionID,
+                        displayName: nil))
+            ]
         }
 
         let helloOk = try await client.openSession(
@@ -55,12 +57,14 @@ final class SessionClientTests: XCTestCase {
             let decoded = try OspreyProtocol.decode(request)
             guard case .ping(let ping) = decoded.body else {
                 XCTFail("expected a ping, got \(decoded.t)")
-                return nil
+                return []
             }
-            return try OspreyProtocol.encode(
-                id: decoded.id,
-                ts: decoded.ts,
-                body: PongBody(seq: ping.seq, echoTs: decoded.ts))
+            return [
+                try OspreyProtocol.encode(
+                    id: decoded.id,
+                    ts: decoded.ts,
+                    body: PongBody(seq: ping.seq, echoTs: decoded.ts))
+            ]
         }
 
         let result = try await client.ping(sequence: 7)
@@ -71,8 +75,10 @@ final class SessionClientTests: XCTestCase {
     func testAPongForTheWrongSequenceIsRefused() async throws {
         let client = try await Self.makeClient { request in
             let decoded = try OspreyProtocol.decode(request)
-            return try OspreyProtocol.encode(
-                id: decoded.id, ts: decoded.ts, body: PongBody(seq: 99, echoTs: decoded.ts))
+            return [
+                try OspreyProtocol.encode(
+                    id: decoded.id, ts: decoded.ts, body: PongBody(seq: 99, echoTs: decoded.ts))
+            ]
         }
 
         do {
@@ -83,32 +89,42 @@ final class SessionClientTests: XCTestCase {
         }
     }
 
-    func testAReplyToAnotherRequestIsRefused() async throws {
+    /// The property the multiplexing reader exists for.
+    ///
+    /// Before it, the client read the next message and assumed it was the
+    /// answer, so a message carrying someone else's id — or an unsolicited push
+    /// like `metrics.tick` — was mistaken for the reply and failed the session.
+    /// Now it is skipped and the real answer, arriving second, still resolves
+    /// the request.
+    func testAnUncorrelatedReplyIsSkippedRatherThanMistakenForTheAnswer() async throws {
         let client = try await Self.makeClient { request in
             let decoded = try OspreyProtocol.decode(request)
-            return try OspreyProtocol.encode(
-                id: UUID(), ts: decoded.ts, body: PongBody(seq: 1, echoTs: decoded.ts))
+            return [
+                // Someone else's correlation id, delivered first.
+                try OspreyProtocol.encode(
+                    id: UUID(), ts: decoded.ts, body: PongBody(seq: 999, echoTs: decoded.ts)),
+                try OspreyProtocol.encode(
+                    id: decoded.id, ts: decoded.ts, body: PongBody(seq: 1, echoTs: decoded.ts)),
+            ]
         }
 
-        do {
-            _ = try await client.ping(sequence: 1)
-            XCTFail("an uncorrelated reply must be refused")
-        } catch let error as SessionError {
-            guard case .correlationMismatch = error else {
-                return XCTFail("expected a correlation mismatch, got \(error)")
-            }
-        }
+        let result = try await client.ping(sequence: 1)
+        XCTAssertEqual(
+            result.sequence, 1,
+            "the request must be answered by its own reply, not by the one before it")
     }
 
     func testAnErrorBodyIsSurfaced() async throws {
         let client = try await Self.makeClient { request in
             let decoded = try OspreyProtocol.decode(request)
-            return try OspreyProtocol.encode(
-                id: decoded.id,
-                ts: decoded.ts,
-                body: ErrorBody(
-                    code: .unsupported, message: "not implemented in this build",
-                    retryable: false))
+            return [
+                try OspreyProtocol.encode(
+                    id: decoded.id,
+                    ts: decoded.ts,
+                    body: ErrorBody(
+                        code: .unsupported, message: "not implemented in this build",
+                        retryable: false))
+            ]
         }
 
         do {

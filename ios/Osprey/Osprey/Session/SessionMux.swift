@@ -17,6 +17,15 @@ import Foundation
 public actor SessionMux {
     private let session: NoiseSession
     private var pending: [UUID: CheckedContinuation<DecodedEnvelope, any Error>] = [:]
+    /// Replies that arrived before their caller was waiting.
+    ///
+    /// `exchange` has to `await` the send, and the reader is free to run during
+    /// that suspension — so on a fast link the answer can be dispatched before
+    /// the continuation is registered. Dropping it there would hang the caller
+    /// forever. Bounded, because a hostile host could otherwise grow this by
+    /// sending replies nobody asked for.
+    private var early: [UUID: DecodedEnvelope] = [:]
+    private static let maxEarlyReplies = 16
     private var tickContinuation: AsyncStream<MetricsTickBody>.Continuation?
     private var reader: Task<Void, Never>?
     /// Set once the link is finished, so a later `exchange` fails immediately
@@ -40,13 +49,18 @@ public actor SessionMux {
         if let closure { throw closure }
         start()
         try await session.send(request)
+        if let answered = early.removeValue(forKey: id) { return answered }
 
         return try await withCheckedThrowingContinuation { continuation in
-            // Re-checked inside the continuation: the read loop can fail between
-            // the send above and this registration, and a continuation stored
-            // after shutdown would never be resumed.
+            // Both re-checked inside the continuation: the reader can fail *or*
+            // answer between the send above and this registration, and a
+            // continuation stored after either would never be resumed.
             if let closure {
                 continuation.resume(throwing: closure)
+                return
+            }
+            if let answered = early.removeValue(forKey: id) {
+                continuation.resume(returning: answered)
                 return
             }
             pending[id] = continuation
@@ -84,6 +98,7 @@ public actor SessionMux {
             continuation.resume(throwing: cause)
         }
         pending.removeAll()
+        early.removeAll()
         tickContinuation?.finish()
         tickContinuation = nil
     }
@@ -112,14 +127,18 @@ public actor SessionMux {
             tickContinuation?.yield(tick)
             return
         }
-        guard let continuation = pending.removeValue(forKey: envelope.id) else {
-            // Not an error worth ending a session over: a reply to a request
-            // that was already abandoned, or a push this build does not consume.
-            OspreyLog.session.debug(
-                "ignoring an uncorrelated \(envelope.t.rawValue, privacy: .public)")
+        if let continuation = pending.removeValue(forKey: envelope.id) {
+            continuation.resume(returning: envelope)
             return
         }
-        continuation.resume(returning: envelope)
+        // Nobody is waiting *yet*. Park it briefly rather than dropping it: the
+        // caller may still be inside its send. Beyond the bound these are
+        // replies to requests nobody made, so the oldest is discarded.
+        if early.count >= Self.maxEarlyReplies, let oldest = early.keys.first {
+            early.removeValue(forKey: oldest)
+            OspreyLog.session.debug("discarding an unclaimed reply; the host is answering unasked")
+        }
+        early[envelope.id] = envelope
     }
 }
 

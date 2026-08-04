@@ -159,7 +159,6 @@ public struct PingRoundTrip: Hashable, Sendable {
 
 public enum SessionError: Error, Hashable, Sendable {
     case unexpectedReply(expected: MessageType, found: MessageType)
-    case correlationMismatch(sent: UUID, received: UUID)
     case pongSequenceMismatch(sent: UInt64, received: UInt64)
     case hostRefused(code: ErrorCode, message: String, retryable: Bool)
     case hostIsNotThePinnedOne
@@ -171,8 +170,6 @@ extension SessionError: LocalizedError {
         case .unexpectedReply(let expected, let found):
             return "The host answered with `\(found.rawValue)` where `\(expected.rawValue)` "
                 + "was expected."
-        case .correlationMismatch:
-            return "The host answered a request this app did not send."
         case .pongSequenceMismatch(let sent, let received):
             return "The host echoed ping \(received) for ping \(sent)."
         case .hostRefused(let code, let message, _):

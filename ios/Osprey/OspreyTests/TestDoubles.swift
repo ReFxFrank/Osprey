@@ -105,13 +105,27 @@ final class ScriptedStream: ByteStream, @unchecked Sendable {
 /// unchanged. Handshake frames are counted and ignored; every frame after them
 /// is treated as one complete application message.
 final class RespondingStream: ByteStream, @unchecked Sendable {
-    typealias Responder = @Sendable (Data) throws -> Data?
+    /// Zero or more replies to one request. A list rather than one optional so a
+    /// test can script a host that answers twice — which is how the
+    /// uncorrelated-reply case is exercised.
+    typealias Responder = @Sendable (Data) throws -> [Data]
+
+    /// How long an idle read waits before giving up.
+    ///
+    /// A real `ByteStream` blocks until bytes arrive or the peer closes, and
+    /// `SessionMux` reads continuously — so a double that returned `nil` for
+    /// "nothing yet" would be telling the mux the host had hung up the instant
+    /// it started. Bounded so a test that scripts no reply fails instead of
+    /// hanging the suite.
+    static let idleTimeout: Duration = .seconds(5)
+    private static let pollInterval: Duration = .milliseconds(2)
 
     private let lock = NSLock()
     private let responder: Responder
     private var readable: Data
     private var pendingWrite = FrameBuffer()
     private var handshakeFramesToIgnore: Int
+    private var closed = false
 
     init(handshakeReply: Data, handshakeFramesToIgnore: Int = 1, responder: @escaping Responder) {
         self.readable = handshakeReply
@@ -124,10 +138,29 @@ final class RespondingStream: ByteStream, @unchecked Sendable {
     }
 
     func read(upTo maxCount: Int) async throws -> Data? {
-        take(maxCount)
+        let deadline = ContinuousClock.now.advanced(by: Self.idleTimeout)
+        while ContinuousClock.now < deadline {
+            if Task.isCancelled { return nil }
+            if let chunk = take(maxCount) { return chunk }
+            if isClosed { return nil }
+            try await Task.sleep(for: Self.pollInterval)
+        }
+        // Out of patience: report a close so the reader ends rather than
+        // spinning, and the waiting exchange fails with a stated reason.
+        return nil
     }
 
-    func close() async {}
+    func close() async {
+        lock.lock()
+        defer { lock.unlock() }
+        closed = true
+    }
+
+    private var isClosed: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return closed
+    }
 
     private func consume(_ data: Data) throws {
         lock.lock()
@@ -138,7 +171,7 @@ final class RespondingStream: ByteStream, @unchecked Sendable {
                 handshakeFramesToIgnore -= 1
                 continue
             }
-            if let reply = try responder(envelope) {
+            for reply in try responder(envelope) {
                 readable.append(try frameEncode(message: reply))
             }
         }
