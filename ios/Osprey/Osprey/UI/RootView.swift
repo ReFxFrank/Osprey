@@ -2,14 +2,27 @@ import SwiftUI
 
 struct RootView: View {
     let model: AppModel
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         NavigationStack {
             content
                 .navigationTitle("Osprey")
                 .navigationBarTitleDisplayMode(.inline)
+                // Declared here rather than inside the dashboard so a push does
+                // not tear down and rebuild the destination's state.
+                .navigationDestination(for: DeviceModel.self) { device in
+                    DeviceDashboardView(model: model, device: device)
+                }
         }
         .task { model.load() }
+        .onChange(of: scenePhase) { _, phase in
+            // iOS suspends the process in the background, so a session that was
+            // healthy at suspend is usually dead on return — and nothing tells
+            // the app, it only finds out by trying (§9.3).
+            guard phase == .active else { return }
+            Task { await model.refreshAfterForeground() }
+        }
     }
 
     @ViewBuilder
@@ -22,10 +35,10 @@ struct RootView: View {
         case .failed(let reason):
             BlockedView(title: "Identity unavailable", detail: reason)
         case .ready:
-            if model.pairedHost == nil {
+            if model.devices.isEmpty {
                 PairView(model: model)
             } else {
-                PairedHostView(model: model)
+                DeviceListView(model: model)
             }
         }
     }

@@ -1,7 +1,11 @@
 import Foundation
 import Observation
 
-/// Everything the UI observes, and the only place app state is mutated.
+/// The app's top level: this phone's identity, the pairing flow, and the list of
+/// machines it is paired with.
+///
+/// Per-machine state lives in [`DeviceModel`], one per paired host (amendment
+/// A23). This object owns only what is genuinely global.
 ///
 /// `@MainActor` throughout: every property here is read during a SwiftUI view
 /// update. The long-running work is `await`ed on the coordinators, which are
@@ -12,16 +16,13 @@ import Observation
 public final class AppModel {
     public private(set) var identityState: IdentityState = .loading
     public private(set) var pairingState: PairingState = .idle
-    public private(set) var connectionState: ConnectionState = .idle
-    public private(set) var pairedHost: PairedHost?
+    public private(set) var devices: [DeviceModel] = []
     /// One line of feedback for the action the operator just took.
     public var banner: String?
 
     @ObservationIgnored private let engine: any NoiseEngine
     @ObservationIgnored private let keychain: KeychainStore
     @ObservationIgnored private let pinStore: PinStore
-    @ObservationIgnored private var openSession: OpenSession?
-    @ObservationIgnored private var pingSequence: UInt64 = 0
 
     public init(
         engine: any NoiseEngine,
@@ -34,7 +35,7 @@ public final class AppModel {
 
     public var identity: DeviceIdentity? { identityState.identity }
 
-    /// Load or create the identity and read back any stored pin.
+    /// Load or create the identity and read back the stored pins.
     ///
     /// Idempotent: the second call returns immediately unless the first failed,
     /// so a view may call it from `.task` without guarding.
@@ -52,8 +53,16 @@ public final class AppModel {
             identityState = .failed(error.localizedMessage)
             return
         }
+        reloadDevices()
+    }
+
+    private func reloadDevices() {
+        guard let identity else { return }
         do {
-            pairedHost = try pinStore.load()
+            devices = try pinStore.loadAll().map { host in
+                DeviceModel(
+                    host: host, engine: engine, identity: identity, pinStore: pinStore)
+            }
         } catch {
             banner = error.localizedMessage
         }
@@ -72,12 +81,13 @@ public final class AppModel {
 
     /// Handle one decoded QR string. Everything it can reject, it rejects before
     /// opening a socket.
+    ///
+    /// Re-pairing a machine that is already pinned is allowed and *replaces* its
+    /// record: the host may have rotated its Noise static, and keeping the old
+    /// entry alongside the new one would leave a stale pin that still looks
+    /// usable. P0 refused this outright because it stored exactly one host.
     public func pair(withScannedText text: String) async {
         guard let identity else { return }
-        guard pairedHost == nil else {
-            pairingState = .failed(PairingError.alreadyPaired.localizedMessage)
-            return
-        }
         let payload: QRPayload
         do {
             payload = try QRPayload.decode(text)
@@ -91,102 +101,26 @@ public final class AppModel {
             let coordinator = PairingCoordinator(engine: engine, identity: identity)
             let host = try await coordinator.pair(with: payload)
             try pinStore.save(host)
-            pairedHost = host
+            reloadDevices()
             pairingState = .idle
-            banner = "Paired. Compare the fingerprint below with the one the host printed."
+            banner = "Paired. Compare the fingerprint with the one the host printed."
         } catch {
             pairingState = .failed(error.localizedMessage)
         }
     }
 
-    // MARK: - Session
+    // MARK: - Device list
 
-    public func connect() async {
-        guard let identity, let host = pairedHost else { return }
-        if case .connected = connectionState { return }
-        if case .connecting = connectionState { return }
-        connectionState = .connecting
-        do {
-            let coordinator = SessionCoordinator(engine: engine, identity: identity)
-            let session = try await coordinator.connect(to: host)
-            openSession = session
-            pingSequence = 0
-            connectionState = .connected(
-                ConnectedSession(
-                    sessionID: session.helloOk.sessionId,
-                    hostDeviceID: session.helloOk.deviceId,
-                    hostSoftwareVersion: session.helloOk.softwareVersion,
-                    lastRoundTripMilliseconds: nil,
-                    pingsSent: 0))
-        } catch {
-            connectionState = .failed(error.localizedMessage)
-        }
+    /// Unpair one machine and drop it from the list.
+    public func forget(_ device: DeviceModel) async {
+        banner = await device.unpair()
+        reloadDevices()
     }
 
-    public func disconnect() async {
-        if let openSession {
-            await openSession.close()
-        }
-        openSession = nil
-        pingSequence = 0
-        connectionState = .idle
-    }
-
-    /// Gate P0 criterion 1's second half: an authenticated encrypted round trip.
-    public func sendPing() async {
-        guard let openSession, case .connected(var connected) = connectionState else { return }
-        pingSequence += 1
-        do {
-            let result = try await openSession.client.ping(sequence: pingSequence)
-            connected.lastRoundTripMilliseconds = result.roundTripMilliseconds
-            connected.pingsSent = pingSequence
-            connectionState = .connected(connected)
-        } catch {
-            let message = error.localizedMessage
-            await disconnect()
-            connectionState = .failed(message)
-        }
-    }
-
-    // MARK: - Unpair
-
-    /// Drop the pin, telling the host first if it can be reached.
-    ///
-    /// The local pin goes whether or not the host answered: this phone stops
-    /// connecting the moment it is gone. The host's own pin is authoritative for
-    /// the host (amendment A18), so if the revocation did not land, the operator
-    /// is told to remove it there rather than being shown a green checkmark.
-    public func unpair() async {
-        guard let identity, let host = pairedHost else { return }
-        let hostOutcome = await tellHostToUnpair(identity: identity, host: host)
-
-        openSession = nil
-        pingSequence = 0
-        connectionState = .idle
-        do {
-            try pinStore.clear()
-            pairedHost = nil
-            banner = "Unpaired. " + hostOutcome
-        } catch {
-            banner = "The stored pairing could not be removed: \(error.localizedMessage)"
-        }
-    }
-
-    private func tellHostToUnpair(identity: DeviceIdentity, host: PairedHost) async -> String {
-        do {
-            let session: OpenSession
-            if let openSession {
-                session = openSession
-            } else {
-                session = try await SessionCoordinator(engine: engine, identity: identity)
-                    .connect(to: host)
-            }
-            let bye = try await UnpairService.revoke(on: session, identity: identity)
-            await session.close()
-            return "The host confirmed it (\(bye.reason.wireValue))."
-        } catch {
-            return "The host was not told (\(error.localizedMessage)). "
-                + "Remove the pairing there with `osprey-svc unpair`."
+    /// Redial anything the operator left connected (§9.3).
+    public func refreshAfterForeground() async {
+        for device in devices {
+            await device.refreshAfterForeground()
         }
     }
 }

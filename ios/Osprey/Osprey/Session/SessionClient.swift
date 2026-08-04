@@ -7,15 +7,17 @@ import Foundation
 public struct SessionClient: Sendable {
     /// Message groups this build implements.
     ///
-    /// Empty, and deliberately so: P0 implements none of them, and advertising a
-    /// capability the app cannot use would be exactly the plausible-looking
-    /// fiction the anti-slop rules forbid. Later phases add entries here.
-    public static let capabilities: [Capability] = []
+    /// An entry appears only once the app can hold that whole conversation —
+    /// advertising one it cannot would be the plausible-looking fiction the
+    /// anti-slop rules forbid. `metrics` earned its place with the dashboard:
+    /// this build subscribes, consumes the pushed ticks, and renders the
+    /// history.
+    public static let capabilities: [Capability] = [.metrics]
 
-    let session: NoiseSession
+    let mux: SessionMux
 
-    public init(session: NoiseSession) {
-        self.session = session
+    public init(mux: SessionMux) {
+        self.mux = mux
     }
 
     /// Send `hello` and read the host's `hello.ok`.
@@ -90,14 +92,44 @@ public struct SessionClient: Sendable {
             let envelope = try OspreyProtocol.encode(
                 ts: Self.nowMilliseconds(),
                 body: ByeBody(reason: .normal, detail: nil))
-            try await session.send(envelope)
+            try await mux.send(envelope)
             return nil
         } catch {
             return error
         }
     }
 
+    /// Open or replace the metrics stream, and take the backfill it answers with.
+    ///
+    /// The subscribe *is* the history request — that is what keeps the metrics
+    /// group at the three message types the registry reserved for it — so the
+    /// correlated answer is a `metrics.history` body. Pushed `metrics.tick`
+    /// frames follow on [`SessionMux.metricsTicks`], carrying this request's id
+    /// in their `sub` field.
+    public func subscribeToMetrics(
+        backfillSeconds: UInt32,
+        stream: Bool = true
+    ) async throws -> (subscriptionID: UUID, history: MetricsHistoryBody) {
+        let id = UUID()
+        let reply = try await exchange(
+            id: id, body: MetricsSubscribeBody(backfillSeconds: backfillSeconds, stream: stream))
+        guard case .metricsHistory(let history) = reply.body else {
+            throw SessionError.unexpectedReply(expected: .metricsHistory, found: reply.t)
+        }
+        return (id, history)
+    }
+
+    /// Stop the stream. Answered with a (usually empty) history, like any
+    /// subscribe.
+    public func unsubscribeFromMetrics() async throws {
+        _ = try await subscribeToMetrics(backfillSeconds: 0, stream: false)
+    }
+
     /// One request, one correlated response.
+    ///
+    /// Correlation is the mux's job now: it resumes this call with the envelope
+    /// carrying `id`, so a pushed tick arriving mid-exchange can no longer be
+    /// mistaken for the reply.
     private func exchange<Body: OspreyMessageBody>(
         id: UUID,
         timestamp: Int64? = nil,
@@ -105,12 +137,7 @@ public struct SessionClient: Sendable {
     ) async throws -> DecodedEnvelope {
         let sentAt = timestamp ?? Self.nowMilliseconds()
         let request = try OspreyProtocol.encode(id: id, ts: sentAt, body: body)
-        try await session.send(request)
-        let raw = try await session.receiveRequired()
-        let decoded = try OspreyProtocol.decode(raw)
-        guard decoded.id == id else {
-            throw SessionError.correlationMismatch(sent: id, received: decoded.id)
-        }
+        let decoded = try await mux.exchange(id: id, request: request)
         if case .error(let failure) = decoded.body {
             throw SessionError.hostRefused(
                 code: failure.code, message: failure.message, retryable: failure.retryable)

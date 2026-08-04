@@ -22,7 +22,7 @@ final class SessionClientTests: XCTestCase {
         let handshakePayload = try await readHandshakePayload(channel: channel, stream: stream)
         _ = try XCTUnwrap(handshakePayload, "the scripted host must answer the handshake")
         _ = try await channel.promote()
-        return SessionClient(session: NoiseSession(channel: channel, stream: stream))
+        return SessionClient(mux: SessionMux(session: NoiseSession(channel: channel, stream: stream)))
     }
 
     func testHelloIsAnsweredWithHelloOk() async throws {

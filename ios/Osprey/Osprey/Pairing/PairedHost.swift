@@ -18,6 +18,13 @@ public struct PairedHost: Codable, Hashable, Sendable {
     public var lanHints: [LanEndpoint]
     public var pinnedIdentity: PublicIdentity
     public var pairedAtMilliseconds: Int64
+    /// The machine's own name, learned from `hello.ok` (amendment A24).
+    ///
+    /// `nil` until this phone has completed one session, because the QR carries
+    /// no name — so a freshly paired machine is listed by its fingerprint until
+    /// it introduces itself. Display-only, and attacker-supplied like any other
+    /// peer-provided text: never used as an identifier or compared against.
+    public var displayName: String?
 
     public init(
         agentDeviceID: String,
@@ -25,7 +32,8 @@ public struct PairedHost: Codable, Hashable, Sendable {
         relayURL: String,
         lanHints: [LanEndpoint],
         pinnedIdentity: PublicIdentity,
-        pairedAtMilliseconds: Int64
+        pairedAtMilliseconds: Int64,
+        displayName: String? = nil
     ) {
         self.agentDeviceID = agentDeviceID
         self.accountID = accountID
@@ -33,6 +41,18 @@ public struct PairedHost: Codable, Hashable, Sendable {
         self.lanHints = lanHints
         self.pinnedIdentity = pinnedIdentity
         self.pairedAtMilliseconds = pairedAtMilliseconds
+        self.displayName = displayName
+    }
+
+    /// The pinned key's fingerprint — the durable identity of this machine, and
+    /// the thing an operator compares against what the host printed.
+    public var fingerprint: Fingerprint { Fingerprint.of(pinnedIdentity) }
+
+    /// What to show in the device list: the machine's name once it has given
+    /// one, and its pinned fingerprint until then.
+    public var listLabel: String {
+        if let displayName, !displayName.isEmpty { return displayName }
+        return fingerprint.short
     }
 
     public var pairedAt: Date {

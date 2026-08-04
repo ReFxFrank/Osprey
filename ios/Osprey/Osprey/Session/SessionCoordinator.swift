@@ -50,12 +50,12 @@ public struct SessionCoordinator: Sendable {
                 throw SessionError.hostIsNotThePinnedOne
             }
 
-            let client = SessionClient(
-                session: NoiseSession(channel: channel, stream: stream))
+            let mux = SessionMux(session: NoiseSession(channel: channel, stream: stream))
+            let client = SessionClient(mux: mux)
             let helloOk = try await client.openSession(
                 deviceID: identity.deviceID,
                 softwareVersion: AppVersion.current)
-            return OpenSession(client: client, stream: stream, helloOk: helloOk)
+            return OpenSession(client: client, mux: mux, stream: stream, helloOk: helloOk)
         }
     }
 }
@@ -63,6 +63,7 @@ public struct SessionCoordinator: Sendable {
 /// A live session and the host's answer to `hello`.
 public struct OpenSession: Sendable {
     public let client: SessionClient
+    public let mux: SessionMux
     public let stream: any ByteStream
     public let helloOk: HelloOkBody
 
@@ -71,6 +72,10 @@ public struct OpenSession: Sendable {
             OspreyLog.session.notice(
                 "could not send bye: \(String(describing: failure), privacy: .public)")
         }
+        // Before the stream: the reader task is blocked on a receive that
+        // closing the stream would turn into an error, and shutting the mux down
+        // first makes that an expected end rather than a reported failure.
+        await mux.shutdown()
         await stream.close()
     }
 }
