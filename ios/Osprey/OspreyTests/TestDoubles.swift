@@ -142,7 +142,7 @@ final class RespondingStream: ByteStream, @unchecked Sendable {
         while ContinuousClock.now < deadline {
             if Task.isCancelled { return nil }
             if let chunk = take(maxCount) { return chunk }
-            if isClosed { return nil }
+            if isClosed() { return nil }
             try await Task.sleep(for: Self.pollInterval)
         }
         // Out of patience: report a close so the reader ends rather than
@@ -151,12 +151,19 @@ final class RespondingStream: ByteStream, @unchecked Sendable {
     }
 
     func close() async {
+        // Through a synchronous helper because `NSLock.lock()` is unavailable
+        // directly from an async context — the same shape `ScriptedStream` uses
+        // above.
+        markClosed()
+    }
+
+    private func markClosed() {
         lock.lock()
         defer { lock.unlock() }
         closed = true
     }
 
-    private var isClosed: Bool {
+    private func isClosed() -> Bool {
         lock.lock()
         defer { lock.unlock() }
         return closed
