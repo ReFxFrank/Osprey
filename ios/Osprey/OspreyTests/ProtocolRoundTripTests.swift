@@ -118,6 +118,14 @@ final class ProtocolRoundTripTests: XCTestCase {
         case .pairRequest(let value): return try OspreyProtocol.encode(id: id, ts: 0, body: value)
         case .pairConfirm(let value): return try OspreyProtocol.encode(id: id, ts: 0, body: value)
         case .pairRevoke(let value): return try OspreyProtocol.encode(id: id, ts: 0, body: value)
+        case .metricsSubscribe(let value):
+            return try OspreyProtocol.encode(id: id, ts: 0, body: value)
+        case .metricsTick(let value): return try OspreyProtocol.encode(id: id, ts: 0, body: value)
+        case .metricsHistory(let value):
+            return try OspreyProtocol.encode(id: id, ts: 0, body: value)
         }
+        // Deliberately no `default`: a new body added to the registry must break
+        // this switch, because a silently unencodable body would drop out of the
+        // round-trip test that exists to prove the wire agrees with Rust.
     }
 }
