@@ -203,7 +203,7 @@ private struct MetricChart: View {
     var body: some View {
         Chart(samples) { sample in
             LineMark(
-                x: .value("Time", sample.at),
+                x: .value("Time", sample.timestamp),
                 y: .value("Value", value(sample)))
                 .interpolationMethod(.monotone)
                 .foregroundStyle(tint)

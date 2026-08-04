@@ -18,7 +18,7 @@ public struct MetricSample: Identifiable, Hashable, Sendable {
     public let netRxBytesPerSec: UInt64?
     public let netTxBytesPerSec: UInt64?
 
-    public var at: Date { Date(timeIntervalSince1970: Double(id) / 1000) }
+    public var timestamp: Date { Date(timeIntervalSince1970: Double(id) / 1000) }
 
     public init(
         atMilliseconds: Int64,

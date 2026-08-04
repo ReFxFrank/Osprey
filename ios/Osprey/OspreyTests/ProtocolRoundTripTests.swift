@@ -7,9 +7,9 @@ import XCTest
 /// what is under test is that the generated Swift encodes and decodes its own
 /// registry without loss.
 final class ProtocolRoundTripTests: XCTestCase {
-    func testEveryDefinedBodyRoundTrips() throws {
-        let deviceID = UUID()
-        let bodies: [MessageBody] = [
+    /// Lifecycle and pairing bodies.
+    private static func coreBodies(deviceID: UUID) -> [MessageBody] {
+        [
             .error(ErrorBody(code: .rateLimited, message: "slow down", retryable: true)),
             .hello(
                 HelloBody(
@@ -33,7 +33,18 @@ final class ProtocolRoundTripTests: XCTestCase {
                     issuerDeviceId: deviceID, revokedDeviceId: deviceID,
                     issuedAt: 1_700_000_000_000,
                     nonce: Data(repeating: 0x5A, count: 32),
-                    signature: Data(repeating: 0x7B, count: 70))),
+                    signature: Data(repeating: 0x7B, count: 70)))
+        ]
+    }
+
+    /// M-01 bodies, each in both its populated and its absent form.
+    ///
+    /// Absent is a different claim from zero — throughput the agent could not
+    /// determine, and a capacity it has not sampled yet — and both must survive
+    /// the round trip as absent, or the client would chart a fabricated idle
+    /// link.
+    private static func metricsBodies(deviceID: UUID) -> [MessageBody] {
+        [
             .metricsSubscribe(MetricsSubscribeBody(backfillSeconds: 86_400, stream: true)),
             .metricsTick(
                 MetricsTickBody(
@@ -43,15 +54,6 @@ final class ProtocolRoundTripTests: XCTestCase {
                     diskUsedBytes: [500_000_000_000, 0],
                     diskTotalBytes: [1_000_000_000_000, 2_000_000_000_000],
                     netRxBytesPerSec: 1_048_576, netTxBytesPerSec: 65_536)),
-            .metricsHistory(
-                MetricsHistoryBody(
-                    sub: deviceID, startTs: 1_699_913_600_000, intervalMs: 30_000,
-                    cpuPercent: [0.0, 55.5, 100.0],
-                    memUsedBytes: [1, 2, 3], memTotalBytes: 34_359_738_368,
-                    netRxBytesPerSec: [0, 10, 20], netTxBytesPerSec: [5, 15, 25])),
-            // Absent is a different claim from zero — throughput the agent
-            // could not determine, and a capacity it has not sampled yet. Both
-            // must survive the round trip as absent.
             .metricsTick(
                 MetricsTickBody(
                     sub: deviceID, ts: 1_700_000_000_000, cpuPercent: 0.0,
@@ -60,10 +62,21 @@ final class ProtocolRoundTripTests: XCTestCase {
                     netRxBytesPerSec: nil, netTxBytesPerSec: nil)),
             .metricsHistory(
                 MetricsHistoryBody(
+                    sub: deviceID, startTs: 1_699_913_600_000, intervalMs: 30_000,
+                    cpuPercent: [0.0, 55.5, 100.0],
+                    memUsedBytes: [1, 2, 3], memTotalBytes: 34_359_738_368,
+                    netRxBytesPerSec: [0, 10, 20], netTxBytesPerSec: [5, 15, 25])),
+            .metricsHistory(
+                MetricsHistoryBody(
                     sub: deviceID, startTs: 0, intervalMs: 30_000,
                     cpuPercent: [], memUsedBytes: [], memTotalBytes: nil,
                     netRxBytesPerSec: [], netTxBytesPerSec: []))
         ]
+    }
+
+    func testEveryDefinedBodyRoundTrips() throws {
+        let deviceID = UUID()
+        let bodies = Self.coreBodies(deviceID: deviceID) + Self.metricsBodies(deviceID: deviceID)
 
         for body in bodies {
             let id = UUID()
@@ -107,6 +120,10 @@ final class ProtocolRoundTripTests: XCTestCase {
         }
     }
 
+    // One arm per registry entry, so its "complexity" is just the size of the
+    // protocol. Collapsing it behind a protocol witness would hide exactly what
+    // this test is checking: that every defined body encodes.
+    // swiftlint:disable:next cyclomatic_complexity
     private func encode(id: UUID, body: MessageBody) throws -> Data {
         switch body {
         case .error(let value): return try OspreyProtocol.encode(id: id, ts: 0, body: value)

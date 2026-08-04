@@ -104,7 +104,7 @@ final class SessionClientTests: XCTestCase {
                 try OspreyProtocol.encode(
                     id: UUID(), ts: decoded.ts, body: PongBody(seq: 999, echoTs: decoded.ts)),
                 try OspreyProtocol.encode(
-                    id: decoded.id, ts: decoded.ts, body: PongBody(seq: 1, echoTs: decoded.ts)),
+                    id: decoded.id, ts: decoded.ts, body: PongBody(seq: 1, echoTs: decoded.ts))
             ]
         }
 
